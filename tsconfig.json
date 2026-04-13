@@ -11,7 +11,8 @@
       "@bun/*": ["src/bun/*"],
       "@views/*": ["src/views/*"]
     },
+    "skipLibCheck": true,
     "types": ["bun-types"]
   },
-  "include": ["src/**/*", "electrobun.config.ts"]
+    "include": ["src/**/*", "electrobun.config.ts", "src/declarations.d.ts"]
 }

@@ -21,3 +21,5 @@ daemon/proto/*.pb.go
 *.onnx
 *.bin
 *.moc3
+src/views/mainview/vendor/live2dcubismcore.min.js
+assets/models/

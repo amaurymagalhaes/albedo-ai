@@ -1,0 +1,127 @@
+.settings-panel {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 100%;
+  background: rgba(15, 15, 25, 0.95);
+  backdrop-filter: blur(20px);
+  z-index: 100;
+  padding: 24px 20px;
+  transform: translateX(100%);
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  overflow-y: auto;
+  -webkit-app-region: no-drag;
+}
+
+.settings-panel.visible {
+  transform: translateX(0);
+}
+
+.settings-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #fff;
+  margin-bottom: 24px;
+}
+
+.settings-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 18px;
+  color: rgba(255, 255, 255, 0.8);
+  font-size: 13px;
+}
+
+.settings-row label {
+  flex: 1;
+}
+
+.settings-row select,
+.settings-row input[type="text"] {
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 6px;
+  color: #fff;
+  padding: 4px 8px;
+  font-size: 12px;
+  outline: none;
+  width: 140px;
+}
+
+.settings-row input[type="range"] {
+  width: 120px;
+}
+
+.settings-toggle {
+  position: relative;
+  width: 40px;
+  height: 22px;
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 11px;
+  cursor: pointer;
+  border: none;
+  transition: background 0.2s;
+  -webkit-app-region: no-drag;
+}
+
+.settings-toggle.active {
+  background: rgba(130, 180, 255, 0.6);
+}
+
+.settings-toggle::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  background: #fff;
+  border-radius: 50%;
+  transition: transform 0.2s;
+}
+
+.settings-toggle.active::after {
+  transform: translateX(18px);
+}
+
+.settings-close {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  background: none;
+  border: none;
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 20px;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+
+.settings-close:hover {
+  color: #fff;
+}
+
+.chat-toggle {
+  position: absolute;
+  bottom: 16px;
+  right: 16px;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: rgba(20, 20, 30, 0.7);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: #fff;
+  font-size: 16px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 30;
+  -webkit-app-region: no-drag;
+}
+
+.chat-toggle:hover {
+  background: rgba(40, 40, 60, 0.9);
+}
