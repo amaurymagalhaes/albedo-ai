@@ -1,0 +1,23 @@
+# Binaries
+bin/
+
+# Rust
+audio-engine/target/
+
+# Go
+daemon/cmd/albedo-daemon/albedo-daemon
+
+# Node / Bun
+node_modules/
+.electrobun/
+
+# Generated protobuf code
+src/bun/rpc/generated/
+daemon/proto/*.pb.go
+
+# Secrets
+.env
+*.ggml
+*.onnx
+*.bin
+*.moc3

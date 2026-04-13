@@ -1,0 +1,23 @@
+{
+  "name": "albedo-ai",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "electrobun dev",
+    "build": "electrobun build",
+    "start": "electrobun start"
+  },
+  "dependencies": {
+    "electrobun": "1.17.3-beta.11",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "typescript": "^5.4.5",
+    "@protobuf-ts/plugin": "^2.9.4",
+    "@grpc/grpc-js": "^1.11.1",
+    "@grpc/proto-loader": "^0.7.13"
+  }
+}
