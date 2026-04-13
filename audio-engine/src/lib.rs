@@ -1,5 +1,10 @@
 pub mod audio_capture;
+pub mod audio_playback;
+pub mod lipsync;
+pub mod loopback;
+pub mod phonemizer;
 pub mod stt;
+pub mod tts;
 pub mod vad;
 
 pub mod audio_proto {
@@ -22,6 +27,8 @@ enum VadState {
 pub struct AlbedoAudioEngine {
     pub whisper: stt::WhisperEngine,
     pub vad: Arc<Mutex<vad::VadEngine>>,
+    pub kokoro: Arc<tts::KokoroEngine>,
+    pub playback: Arc<Mutex<audio_playback::PlaybackEngine>>,
     pub capture_tx: Arc<Mutex<Option<mpsc::Sender<Vec<f32>>>>>,
     pub capture_handle: Arc<Mutex<Option<audio_capture::CaptureHandle>>>,
     pub capture_rx: Arc<Mutex<Option<mpsc::Receiver<Vec<f32>>>>>,
@@ -183,7 +190,7 @@ impl AudioEngine for AlbedoAudioEngine {
         &self,
         _request: Request<Empty>,
     ) -> Result<Response<Self::WatchTranscriptionsStream>, Status> {
-        Err(Status::unimplemented("WatchTranscriptions is not implemented in Phase 1"))
+        Err(Status::unimplemented("WatchTranscriptions is not yet implemented"))
     }
 
     async fn start_capture(
@@ -259,23 +266,64 @@ impl AudioEngine for AlbedoAudioEngine {
 
     async fn synthesize(
         &self,
-        _request: Request<SynthesizeRequest>,
+        request: Request<SynthesizeRequest>,
     ) -> Result<Response<SynthesizeResponse>, Status> {
-        Err(Status::unimplemented("Synthesize is not implemented in Phase 1"))
+        let req = request.into_inner();
+
+        if req.text.is_empty() {
+            return Ok(Response::new(SynthesizeResponse {
+                pcm_data: Vec::new(),
+                visemes: Vec::new(),
+            }));
+        }
+
+        let voice_id = if req.voice_id.is_empty() {
+            "af_bella".to_string()
+        } else {
+            req.voice_id
+        };
+
+        let speed = if req.speed <= 0.0 { 1.0 } else { req.speed };
+        let text = req.text.clone();
+        let kokoro = Arc::clone(&self.kokoro);
+
+        let (f32_samples, phoneme_events) =
+            tokio::task::spawn_blocking(move || {
+                kokoro.synthesize_internal(&text, &voice_id, speed)
+            })
+            .await
+            .map_err(|e| {
+                tracing::error!("[tts] synthesize task panicked: {}", e);
+                Status::internal(e.to_string())
+            })?
+            .map_err(|e| {
+                tracing::error!("[tts] synthesize error: {}", e);
+                Status::internal(e.to_string())
+            })?;
+
+        let visemes = lipsync::extract_visemes(&phoneme_events);
+        let pcm_data = tts::f32_to_pcm16(&f32_samples);
+
+        {
+            let mut playback = self.playback.lock().await;
+            playback.enqueue(&f32_samples);
+        }
+
+        Ok(Response::new(SynthesizeResponse { pcm_data, visemes }))
     }
 
     async fn start_loopback(
         &self,
         _request: Request<Empty>,
     ) -> Result<Response<CaptureStatus>, Status> {
-        Err(Status::unimplemented("StartLoopback is not implemented in Phase 1"))
+        Err(Status::unimplemented("StartLoopback is not yet implemented"))
     }
 
     async fn stop_loopback(
         &self,
         _request: Request<Empty>,
     ) -> Result<Response<CaptureStatus>, Status> {
-        Err(Status::unimplemented("StopLoopback is not implemented in Phase 1"))
+        Err(Status::unimplemented("StopLoopback is not yet implemented"))
     }
 }
 
