@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM"],
+    "strict": true,
+    "jsx": "react-jsx",
+    "baseUrl": ".",
+    "paths": {
+      "@bun/*": ["src/bun/*"],
+      "@views/*": ["src/views/*"]
+    },
+    "types": ["bun-types"]
+  },
+  "include": ["src/**/*", "electrobun.config.ts"]
+}

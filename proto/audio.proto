@@ -1,0 +1,68 @@
+syntax = "proto3";
+package albedo.audio;
+
+option go_package = "albedo-ai/daemon/proto;proto";
+
+service AudioEngine {
+  // Streaming: mic audio chunks → transcription results
+  rpc StreamSTT(stream AudioChunk) returns (stream TranscriptionResult);
+
+  // Server-push: completed transcriptions after internal VAD+Whisper
+  rpc WatchTranscriptions(Empty) returns (stream TranscriptionResult);
+
+  // Single: text → synthesized audio
+  rpc Synthesize(SynthesizeRequest) returns (SynthesizeResponse);
+
+  // Start/stop mic capture
+  rpc StartCapture(CaptureConfig) returns (CaptureStatus);
+  rpc StopCapture(Empty) returns (CaptureStatus);
+
+  // Start/stop desktop audio loopback
+  rpc StartLoopback(Empty) returns (CaptureStatus);
+  rpc StopLoopback(Empty) returns (CaptureStatus);
+}
+
+message AudioChunk {
+  bytes  pcm_data    = 1;   // f32le PCM
+  uint32 sample_rate = 2;
+  bool   is_speech   = 3;   // VAD result
+  uint64 timestamp_ms = 4;
+}
+
+message TranscriptionResult {
+  string text         = 1;
+  float  confidence   = 2;
+  bool   is_final     = 3;  // Partial vs final
+  uint64 timestamp_ms = 4;
+}
+
+message SynthesizeRequest {
+  string text     = 1;
+  string voice_id = 2;
+  float  speed    = 3;
+}
+
+message SynthesizeResponse {
+  bytes            pcm_data = 1;
+  repeated Viseme  visemes  = 2;  // For lip sync
+}
+
+message Viseme {
+  string shape       = 1;  // "A", "E", "I", "O", "U", "rest", etc.
+  uint32 start_ms    = 2;
+  uint32 duration_ms = 3;
+  float  weight      = 4;
+}
+
+message CaptureConfig {
+  string device_id     = 1;  // Optional, default = system mic
+  uint32 sample_rate   = 2;  // Default 16000
+  float  vad_threshold = 3;  // Default 0.5
+}
+
+message CaptureStatus {
+  bool   active      = 1;
+  string device_name = 2;
+}
+
+message Empty {}
