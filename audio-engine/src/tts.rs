@@ -10,90 +10,132 @@ use std::collections::HashMap;
 pub struct KokoroConfig {
     pub sample_rate: u32,
     pub max_tokens: usize,
-    pub vocab: HashMap<String, i64>,
+    pub vocab: HashMap<char, i64>,
 }
 
 impl Default for KokoroConfig {
     fn default() -> Self {
+        let entries: Vec<(char, i64)> = vec![
+            (';', 1),
+            (':', 2),
+            (',', 3),
+            ('.', 4),
+            ('!', 5),
+            ('?', 6),
+            ('—', 9),
+            ('…', 10),
+            ('"', 11),
+            ('(', 12),
+            (')', 13),
+            ('\u{201c}', 14),
+            ('\u{201d}', 15),
+            (' ', 16),
+            ('\u{303}', 17),
+            ('ʣ', 18),
+            ('ʥ', 19),
+            ('ʦ', 20),
+            ('ʨ', 21),
+            ('ᵝ', 22),
+            ('ꭧ', 23),
+            ('A', 24),
+            ('I', 25),
+            ('O', 31),
+            ('Q', 33),
+            ('S', 35),
+            ('T', 36),
+            ('W', 39),
+            ('Y', 41),
+            ('ᵊ', 42),
+            ('a', 43),
+            ('b', 44),
+            ('c', 45),
+            ('d', 46),
+            ('e', 47),
+            ('f', 48),
+            ('h', 50),
+            ('i', 51),
+            ('j', 52),
+            ('k', 53),
+            ('l', 54),
+            ('m', 55),
+            ('n', 56),
+            ('o', 57),
+            ('p', 58),
+            ('q', 59),
+            ('r', 60),
+            ('s', 61),
+            ('t', 62),
+            ('u', 63),
+            ('v', 64),
+            ('w', 65),
+            ('x', 66),
+            ('y', 67),
+            ('z', 68),
+            ('ɑ', 69),
+            ('ɐ', 70),
+            ('ɒ', 71),
+            ('æ', 72),
+            ('β', 75),
+            ('ɔ', 76),
+            ('ɕ', 77),
+            ('ç', 78),
+            ('ɖ', 80),
+            ('ð', 81),
+            ('ʤ', 82),
+            ('ə', 83),
+            ('ɚ', 85),
+            ('ɛ', 86),
+            ('ɜ', 87),
+            ('ɟ', 90),
+            ('ɡ', 92),
+            ('ɥ', 99),
+            ('ɨ', 101),
+            ('ɪ', 102),
+            ('ʝ', 103),
+            ('ɯ', 110),
+            ('ɰ', 111),
+            ('ŋ', 112),
+            ('ɳ', 113),
+            ('ɲ', 114),
+            ('ɴ', 115),
+            ('ø', 116),
+            ('ɸ', 118),
+            ('θ', 119),
+            ('œ', 120),
+            ('ɹ', 123),
+            ('ɾ', 125),
+            ('ɻ', 126),
+            ('ʁ', 128),
+            ('ɽ', 129),
+            ('ʂ', 130),
+            ('ʃ', 131),
+            ('ʈ', 132),
+            ('ʧ', 133),
+            ('ʊ', 135),
+            ('ʋ', 136),
+            ('ʌ', 138),
+            ('ɣ', 139),
+            ('ɤ', 140),
+            ('χ', 142),
+            ('ʎ', 143),
+            ('ʒ', 147),
+            ('ʔ', 148),
+            ('ˈ', 156),
+            ('ˌ', 157),
+            ('ː', 158),
+            ('ʰ', 162),
+            ('ʲ', 164),
+            ('↓', 169),
+            ('→', 171),
+            ('↗', 172),
+            ('↘', 173),
+            ('ᵻ', 177),
+        ];
+
         let mut vocab = HashMap::new();
-        vocab.insert("$".to_string(), 0);
-        vocab.insert("a".to_string(), 2);
-        vocab.insert("aɪ".to_string(), 3);
-        vocab.insert("aʊ".to_string(), 4);
-        vocab.insert("b".to_string(), 5);
-        vocab.insert("ç".to_string(), 6);
-        vocab.insert("d".to_string(), 7);
-        vocab.insert("ð".to_string(), 8);
-        vocab.insert("ɛ".to_string(), 9);
-        vocab.insert("eɪ".to_string(), 10);
-        vocab.insert("f".to_string(), 11);
-        vocab.insert("ɡ".to_string(), 12);
-        vocab.insert("h".to_string(), 13);
-        vocab.insert("i".to_string(), 14);
-        vocab.insert("ɪ".to_string(), 15);
-        vocab.insert("dʒ".to_string(), 16);
-        vocab.insert("k".to_string(), 17);
-        vocab.insert("l".to_string(), 18);
-        vocab.insert("m".to_string(), 19);
-        vocab.insert("n".to_string(), 20);
-        vocab.insert("ŋ".to_string(), 21);
-        vocab.insert("oʊ".to_string(), 22);
-        vocab.insert("ɔ".to_string(), 23);
-        vocab.insert("ɔɪ".to_string(), 24);
-        vocab.insert("p".to_string(), 25);
-        vocab.insert("ɹ".to_string(), 26);
-        vocab.insert("ʃ".to_string(), 27);
-        vocab.insert("s".to_string(), 28);
-        vocab.insert("t".to_string(), 29);
-        vocab.insert("θ".to_string(), 30);
-        vocab.insert("tʃ".to_string(), 31);
-        vocab.insert("ʌ".to_string(), 32);
-        vocab.insert("u".to_string(), 33);
-        vocab.insert("ʊ".to_string(), 34);
-        vocab.insert("v".to_string(), 35);
-        vocab.insert("w".to_string(), 36);
-        vocab.insert("j".to_string(), 37);
-        vocab.insert("z".to_string(), 38);
-        vocab.insert("ʒ".to_string(), 39);
-        vocab.insert("ˈa".to_string(), 40);
-        vocab.insert("ˈaɪ".to_string(), 41);
-        vocab.insert("ˈaʊ".to_string(), 42);
-        vocab.insert("ˈb".to_string(), 43);
-        vocab.insert("ˈç".to_string(), 44);
-        vocab.insert("ˈd".to_string(), 45);
-        vocab.insert("ˈð".to_string(), 46);
-        vocab.insert("ˈɛ".to_string(), 47);
-        vocab.insert("ˈeɪ".to_string(), 48);
-        vocab.insert("ˈf".to_string(), 49);
-        vocab.insert("ˈɡ".to_string(), 50);
-        vocab.insert("ˈh".to_string(), 51);
-        vocab.insert("ˈi".to_string(), 52);
-        vocab.insert("ˈɪ".to_string(), 53);
-        vocab.insert("ˈdʒ".to_string(), 54);
-        vocab.insert("ˈk".to_string(), 55);
-        vocab.insert("ˈl".to_string(), 56);
-        vocab.insert("ˈm".to_string(), 57);
-        vocab.insert("ˈn".to_string(), 58);
-        vocab.insert("ˈŋ".to_string(), 59);
-        vocab.insert("ˈoʊ".to_string(), 60);
-        vocab.insert("ˈɔ".to_string(), 61);
-        vocab.insert("ˈɔɪ".to_string(), 62);
-        vocab.insert("ˈp".to_string(), 63);
-        vocab.insert("ˈɹ".to_string(), 64);
-        vocab.insert("ˈʃ".to_string(), 65);
-        vocab.insert("ˈs".to_string(), 66);
-        vocab.insert("ˈt".to_string(), 67);
-        vocab.insert("ˈθ".to_string(), 68);
-        vocab.insert("ˈtʃ".to_string(), 69);
-        vocab.insert("ˈʌ".to_string(), 70);
-        vocab.insert("ˈu".to_string(), 71);
-        vocab.insert("ˈʊ".to_string(), 72);
-        vocab.insert("ˈv".to_string(), 73);
-        vocab.insert("ˈw".to_string(), 74);
-        vocab.insert("ˈj".to_string(), 75);
-        vocab.insert("ˈz".to_string(), 76);
-        vocab.insert("ˈʒ".to_string(), 77);
-        vocab.insert("_".to_string(), 78);
+        for (c, id) in entries {
+            vocab.insert(c, id);
+        }
 
         KokoroConfig {
             sample_rate: 24000,
@@ -115,7 +157,7 @@ impl KokoroEngine {
         if !std::path::Path::new(model_path).exists() {
             bail!(
                 "Kokoro TTS model not found at '{}'. \
-                 Download the Kokoro v0.19 ONNX model and place it in the assets directory.",
+                 Download the Kokoro ONNX model and place it in the assets directory.",
                 model_path
             );
         }
@@ -178,21 +220,13 @@ impl KokoroEngine {
         } else {
             "en"
         };
-        let phonemes = self.phonemizer.phonemize(text, lang);
+        let ipa = self.phonemizer.phonemize(text, lang);
 
-        let mut tokens: Vec<i64> = Vec::new();
-        let mut phoneme_strings: Vec<String> = Vec::new();
-        for p in &phonemes {
-            if let Some(&id) = self.config.vocab.get(p) {
-                tokens.push(id);
-                phoneme_strings.push(p.clone());
-            }
+        let tokens = self.tokenize(&ipa);
+
+        if tokens.is_empty() {
+            return Ok((Vec::new(), Vec::new()));
         }
-
-        tokens.push(1);
-
-        let pad_len = self.config.max_tokens.saturating_sub(tokens.len());
-        tokens.extend(std::iter::repeat(0).take(pad_len));
 
         let style = match self.voice_embeddings.get(voice_id) {
             Some(emb) => emb.clone(),
@@ -213,6 +247,12 @@ impl KokoroEngine {
 
         let audio = self.run_inference(&tokens, &style, speed)?;
         let resampled = resample_24k_to_22k(audio)?;
+
+        let phoneme_strings: Vec<String> = ipa
+            .chars()
+            .filter(|c| c.is_alphabetic() || !c.is_ascii())
+            .map(|c| c.to_string())
+            .collect();
         let phoneme_events = self.build_phoneme_events(&phoneme_strings, resampled.len());
 
         Ok((resampled, phoneme_events))
@@ -230,17 +270,10 @@ impl KokoroEngine {
         Ok((pcm_bytes, visemes))
     }
 
-    pub fn tokenize(&self, text: &str) -> (Vec<i64>, Vec<String>) {
-        let phonemes = self.phonemizer.phonemize(text, "en");
-        let mut token_ids = Vec::new();
-        let mut phoneme_strings = Vec::new();
-        for p in &phonemes {
-            if let Some(&id) = self.config.vocab.get(p) {
-                token_ids.push(id);
-                phoneme_strings.push(p.clone());
-            }
-        }
-        (token_ids, phoneme_strings)
+    pub fn tokenize(&self, ipa: &str) -> Vec<i64> {
+        ipa.chars()
+            .filter_map(|c| self.config.vocab.get(&c).copied())
+            .collect()
     }
 
     fn run_inference(&self, tokens: &[i64], style: &[f32], speed: f32) -> Result<Vec<f32>> {
