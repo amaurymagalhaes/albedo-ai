@@ -128,14 +128,13 @@ export interface ToolSchemaDef {
   dangerous: boolean;
 }
 
+const HISTORY_BUDGET = 1_800_000;
+
 export class ContextManager {
   history: ConversationTurn[] = [];
   private awarenessSnapshot: AwarenessSnapshot | null = null;
   private pendingVisionB64: string | null = null;
   private totalHistoryTokens = 0;
-
-  private HISTORY_BUDGET = 1_990_000;
-  private readonly SYSTEM_RESERVE = 6_096;
 
   updateAwareness(snapshot: AwarenessSnapshot): void {
     this.awarenessSnapshot = snapshot;
@@ -185,9 +184,21 @@ export class ContextManager {
 
   buildMessages(userText: string): Message[] {
     const systemPrompt = this.buildSystemPrompt();
+    const systemTokens = this.estimateTokens(systemPrompt);
+
+    let historySlice = this.history;
+    let historyTokens = this.totalHistoryTokens;
+
+    while (historyTokens + systemTokens > HISTORY_BUDGET && historySlice.length > 2) {
+      const removed = historySlice[0];
+      const paired = historySlice[1];
+      historyTokens -= removed.tokenCount + (paired ? paired.tokenCount : 0);
+      historySlice = historySlice.slice(2);
+    }
+
     const messages: Message[] = [{ role: "system", content: systemPrompt }];
 
-    for (const turn of this.history) {
+    for (const turn of historySlice) {
       messages.push({ role: turn.role, content: turn.content });
     }
 
@@ -228,37 +239,42 @@ export class ContextManager {
   }
 
   private buildSystemPrompt(): string {
-    let prompt = `You are Albedo, a helpful AI companion running on the user's desktop.\nYou have real-time awareness of the user's system state.`;
+    const awareness = this.awarenessSnapshot;
+    const sections: string[] = [
+      `You are Albedo, a highly capable AI desktop assistant.`,
+      `You have real-time awareness of the user's system.`,
+      awareness ? `## Current System State\n${this.formatAwareness(awareness)}` : "",
+      this.pendingVisionB64 ? `## Recent Screenshot\n[Image attached]` : "",
+      `## Personality\nBe concise, warm, and practical. Respond in the same language the user speaks.`,
+      `## Tools\nYou have access to system tools. Use them proactively when they would help.`,
+    ];
+    return sections.filter(Boolean).join("\n\n");
+  }
 
-    if (this.awarenessSnapshot) {
-      const s = this.awarenessSnapshot;
-      const aw = s.activeWindow;
-      const m = s.metrics;
-      prompt += `\n\n--- CURRENT SYSTEM STATE ---`;
-      if (aw) {
-        prompt += `\nActive window: ${aw.appName} — "${aw.title}"`;
-      }
-      if (m) {
-        prompt += `\nCPU: ${m.cpuPercent.toFixed(1)}% | RAM: ${m.ramPercent.toFixed(1)}%`;
-      }
-      prompt += `\nTime: ${new Date(s.timestampMs).toLocaleString()}`;
-      if (s.clipboardContent) {
-        prompt += `\nClipboard: ${this.truncate(s.clipboardContent, 200)}`;
-      }
-      if (s.recentNotifications.length > 0) {
-        prompt += `\nRecent notifications: ${s.recentNotifications.slice(0, 3).join("; ")}`;
-      }
-      prompt += `\n---`;
+  private formatAwareness(aw: AwarenessSnapshot): string {
+    const lines: string[] = [];
+    if (aw.activeWindow) {
+      lines.push(`- Active window: ${aw.activeWindow.appName} — "${aw.activeWindow.title}"`);
     }
-
-    prompt += `\n\nRespond conversationally and concisely. When the user asks you to do something that requires\na tool, use the available tools. Prefer short sentences that work well when spoken aloud.\nDo not use markdown formatting in your spoken responses.`;
-
-    return prompt;
+    if (aw.metrics) {
+      lines.push(`- CPU: ${aw.metrics.cpuPercent.toFixed(1)}% | RAM: ${aw.metrics.ramPercent.toFixed(1)}% | Disk: ${aw.metrics.diskPercent.toFixed(1)}%`);
+      if (aw.metrics.networkMbpsIn > 0 || aw.metrics.networkMbpsOut > 0) {
+        lines.push(`- Network: ↓${aw.metrics.networkMbpsIn.toFixed(1)} Mbps / ↑${aw.metrics.networkMbpsOut.toFixed(1)} Mbps`);
+      }
+    }
+    lines.push(`- Time: ${new Date(aw.timestampMs).toLocaleString()}`);
+    if (aw.clipboardContent) {
+      lines.push(`- Clipboard: ${this.truncate(aw.clipboardContent, 500)}`);
+    }
+    if (aw.recentNotifications.length > 0) {
+      lines.push(`- Recent notifications: ${aw.recentNotifications.slice(0, 3).join("; ")}`);
+    }
+    return lines.join("\n");
   }
 
   private trimHistory(): void {
     while (
-      this.totalHistoryTokens > this.HISTORY_BUDGET &&
+      this.totalHistoryTokens > HISTORY_BUDGET &&
       this.history.length > 2
     ) {
       const removed = this.history.shift()!;

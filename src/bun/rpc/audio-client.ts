@@ -19,18 +19,23 @@ export interface SynthesizeResult {
   }>;
 }
 
-export class AudioClient extends EventEmitter {
-  private client: any;
-  private reconnectAttempts = 0;
-  private maxReconnectAttempts = 5;
-  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+const RECONNECT_MAX_ATTEMPTS = 3;
+const RECONNECT_BASE_DELAY = 100;
 
-  constructor(private address: string) {
+export class AudioClient extends EventEmitter {
+  private client: any = null;
+  private connected = false;
+  private reconnectAttempts = 0;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private transcriptionCb: ((result: TranscriptionEvent) => void) | null = null;
+  private transcriptionCancel: (() => void) | null = null;
+  private captureActive = false;
+
+  constructor(private socketPath: string) {
     super();
-    this.connect();
   }
 
-  private connect(): void {
+  async connect(): Promise<void> {
     this.client?.close();
 
     const packageDef = protoLoader.loadSync(
@@ -45,7 +50,7 @@ export class AudioClient extends EventEmitter {
     );
     const proto = grpc.loadPackageDefinition(packageDef) as any;
     this.client = new proto.albedo.audio.AudioEngine(
-      this.address,
+      this.socketPath,
       grpc.credentials.createInsecure(),
       {
         "grpc.keepalive_time_ms": 30_000,
@@ -55,73 +60,107 @@ export class AudioClient extends EventEmitter {
       }
     );
 
+    this.connected = true;
     this.reconnectAttempts = 0;
-  }
+    console.log("[audio-client] connected to", this.socketPath);
 
-  private scheduleReconnect(): void {
-    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-      this.emit("error", new Error(`AudioClient: failed after ${this.maxReconnectAttempts} reconnect attempts`));
-      return;
+    if (this.transcriptionCb) {
+      this.registerTranscriptionStream(this.transcriptionCb);
     }
-
-    const delay = Math.min(100 * Math.pow(2, this.reconnectAttempts), 5000);
-    this.reconnectAttempts++;
-    console.warn(`[audio-client] reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})`);
-
-    this.reconnectTimer = setTimeout(() => {
-      try {
-        this.connect();
-      } catch {
-        this.scheduleReconnect();
-      }
-    }, delay);
   }
 
-  close(): void {
+  async disconnect(): Promise<void> {
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+    if (this.transcriptionCancel) {
+      this.transcriptionCancel();
+      this.transcriptionCancel = null;
+    }
+    if (this.captureActive) {
+      try {
+        await this.stopCapture();
+      } catch {}
+    }
     this.client?.close();
     this.client = null;
+    this.connected = false;
+    console.log("[audio-client] disconnected");
+  }
+
+  isConnected(): boolean {
+    return this.connected;
+  }
+
+  async healthCheck(): Promise<boolean> {
+    if (!this.connected || !this.client) return false;
+    try {
+      await Promise.race([
+        new Promise<{ active: boolean; deviceName: string }>((resolve, reject) => {
+          this.client.stopCapture({}, (err: grpc.ServiceError | null, response: any) => {
+            if (err) reject(err);
+            else resolve({ active: response.active, deviceName: response.device_name });
+          });
+        }),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("timeout")), 3000)
+        ),
+      ]);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async play(_pcmData: Uint8Array): Promise<void> {
+    console.log("[audio-client] play() is a no-op; playback is handled internally after synthesize");
   }
 
   async startCapture(config: {
     sampleRate: number;
     vadThreshold: number;
   }): Promise<{ active: boolean; deviceName: string }> {
-    return new Promise((resolve, reject) => {
-      this.client.startCapture(
-        {
-          sample_rate: config.sampleRate,
-          vad_threshold: config.vadThreshold,
-        },
-        (err: grpc.ServiceError | null, response: any) => {
-          if (err) reject(err);
-          else
-            resolve({
-              active: response.active,
-              deviceName: response.device_name,
-            });
-        }
-      );
-    });
+    return this.withReconnect(() =>
+      new Promise((resolve, reject) => {
+        this.client.startCapture(
+          {
+            sample_rate: config.sampleRate,
+            vad_threshold: config.vadThreshold,
+          },
+          (err: grpc.ServiceError | null, response: any) => {
+            if (err) reject(err);
+            else {
+              this.captureActive = true;
+              resolve({
+                active: response.active,
+                deviceName: response.device_name,
+              });
+            }
+          }
+        );
+      })
+    );
   }
 
   async stopCapture(): Promise<{ active: boolean; deviceName: string }> {
-    return new Promise((resolve, reject) => {
-      this.client.stopCapture(
-        {},
-        (err: grpc.ServiceError | null, response: any) => {
-          if (err) reject(err);
-          else
-            resolve({
-              active: response.active,
-              deviceName: response.device_name,
-            });
-        }
-      );
-    });
+    return this.withReconnect(() =>
+      new Promise((resolve, reject) => {
+        this.client.stopCapture(
+          {},
+          (err: grpc.ServiceError | null, response: any) => {
+            if (err) reject(err);
+            else {
+              this.captureActive = false;
+              resolve({
+                active: response.active,
+                deviceName: response.device_name,
+              });
+            }
+          }
+        );
+      })
+    );
   }
 
   async synthesize(req: {
@@ -129,33 +168,55 @@ export class AudioClient extends EventEmitter {
     voiceId: string;
     speed: number;
   }): Promise<SynthesizeResult> {
-    return new Promise((resolve, reject) => {
-      this.client.synthesize(
-        {
-          text: req.text,
-          voice_id: req.voiceId,
-          speed: req.speed,
-        },
-        (err: grpc.ServiceError | null, response: any) => {
-          if (err) reject(err);
-          else
-            resolve({
-              pcmData: response.pcm_data,
-              visemes: (response.visemes ?? []).map((v: any) => ({
-                shape: v.shape,
-                startMs: v.start_ms,
-                durationMs: v.duration_ms,
-                weight: v.weight,
-              })),
-            });
-        }
-      );
-    });
+    return this.withReconnect(() =>
+      new Promise((resolve, reject) => {
+        this.client.synthesize(
+          {
+            text: req.text,
+            voice_id: req.voiceId,
+            speed: req.speed,
+          },
+          (err: grpc.ServiceError | null, response: any) => {
+            if (err) reject(err);
+            else
+              resolve({
+                pcmData: response.pcm_data,
+                visemes: (response.visemes ?? []).map((v: any) => ({
+                  shape: v.shape,
+                  startMs: v.start_ms,
+                  durationMs: v.duration_ms,
+                  weight: v.weight,
+                })),
+              });
+          }
+        );
+      })
+    );
   }
 
   onTranscription(
     cb: (result: TranscriptionEvent) => void
   ): () => void {
+    this.transcriptionCb = cb;
+    this.registerTranscriptionStream(cb);
+
+    return () => {
+      this.transcriptionCb = null;
+      if (this.transcriptionCancel) {
+        this.transcriptionCancel();
+        this.transcriptionCancel = null;
+      }
+    };
+  }
+
+  private registerTranscriptionStream(
+    cb: (result: TranscriptionEvent) => void
+  ): void {
+    if (this.transcriptionCancel) {
+      this.transcriptionCancel();
+      this.transcriptionCancel = null;
+    }
+
     const call = this.client.watchTranscriptions({});
     call.on("data", (result: any) => {
       cb({
@@ -167,12 +228,82 @@ export class AudioClient extends EventEmitter {
     call.on("error", (err: Error) => {
       console.warn("[audio-client] transcription stream error:", err.message);
       this.emit("error", err);
+      if (this.isUnavailableError(err)) {
+        this.scheduleReconnect();
+      }
     });
 
-    return () => {
+    this.transcriptionCancel = () => {
       try {
         call.cancel();
       } catch {}
     };
+  }
+
+  close(): void {
+    this.disconnect();
+  }
+
+  private async withReconnect<T>(fn: () => Promise<T>): Promise<T> {
+    try {
+      return await fn();
+    } catch (err: any) {
+      if (this.isUnavailableError(err)) {
+        console.warn("[audio-client] gRPC call failed, attempting reconnect:", err.message);
+        await this.attemptReconnect();
+        return fn();
+      }
+      throw err;
+    }
+  }
+
+  private isUnavailableError(err: any): boolean {
+    if (!err) return false;
+    const code = err.code;
+    return (
+      code === grpc.status.UNAVAILABLE ||
+      code === grpc.status.DEADLINE_EXCEEDED
+    );
+  }
+
+  private async attemptReconnect(): Promise<void> {
+    for (let i = 0; i < RECONNECT_MAX_ATTEMPTS; i++) {
+      const delay = RECONNECT_BASE_DELAY * Math.pow(4, i);
+      console.log(`[audio-client] reconnect attempt ${i + 1}/${RECONNECT_MAX_ATTEMPTS} in ${delay}ms`);
+      await new Promise((resolve) => setTimeout(resolve, delay));
+      try {
+        await this.connect();
+        return;
+      } catch (err: any) {
+        console.warn(`[audio-client] reconnect attempt ${i + 1} failed:`, err.message);
+      }
+    }
+    this.connected = false;
+    this.emit("error", new Error(`[audio-client] failed after ${RECONNECT_MAX_ATTEMPTS} reconnect attempts`));
+    throw new Error(`[audio-client] failed after ${RECONNECT_MAX_ATTEMPTS} reconnect attempts`);
+  }
+
+  private scheduleReconnect(): void {
+    if (this.reconnectAttempts >= RECONNECT_MAX_ATTEMPTS) {
+      this.connected = false;
+      this.emit("error", new Error(`[audio-client] failed after ${RECONNECT_MAX_ATTEMPTS} reconnect attempts`));
+      return;
+    }
+
+    const delay = RECONNECT_BASE_DELAY * Math.pow(4, this.reconnectAttempts);
+    this.reconnectAttempts++;
+    console.warn(`[audio-client] scheduling reconnect in ${delay}ms (attempt ${this.reconnectAttempts})`);
+
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+    }
+
+    this.reconnectTimer = setTimeout(async () => {
+      try {
+        await this.connect();
+      } catch {
+        this.scheduleReconnect();
+      }
+    }, delay);
   }
 }

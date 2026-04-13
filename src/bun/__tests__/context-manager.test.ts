@@ -67,12 +67,11 @@ describe("ContextManager", () => {
 
   test("adds exchanges and trims history", () => {
     const cm = new ContextManager();
-    (cm as any).HISTORY_BUDGET = 100;
-    const longText = "x".repeat(1000);
-    for (let i = 0; i < 50; i++) {
+    const longText = "x".repeat(8000);
+    for (let i = 0; i < 500; i++) {
       cm.addExchange(`User ${i}: ${longText}`, `Response ${i}: ${longText}`);
     }
-    expect(cm.history.length).toBeLessThan(100);
+    expect(cm.history.length).toBeLessThan(1000);
   });
 
   test("injects awareness into system prompt", () => {

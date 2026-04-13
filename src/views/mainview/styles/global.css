@@ -19,3 +19,165 @@ html, body, #root {
   background: transparent;
   user-select: none;
 }
+
+.confirmation-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+  -webkit-app-region: no-drag;
+}
+
+.confirmation-dialog {
+  background: rgba(30, 30, 45, 0.95);
+  backdrop-filter: blur(20px);
+  border-radius: 16px;
+  padding: 20px;
+  max-width: 340px;
+  width: 90%;
+  color: #fff;
+}
+
+.confirmation-title {
+  font-size: 15px;
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+
+.confirmation-body {
+  font-size: 13px;
+  line-height: 1.5;
+  margin-bottom: 16px;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.confirmation-body p {
+  margin: 4px 0;
+}
+
+.confirmation-args {
+  font-family: monospace;
+  font-size: 11px;
+  background: rgba(255, 255, 255, 0.08);
+  padding: 8px;
+  border-radius: 6px;
+  max-height: 100px;
+  overflow-y: auto;
+  word-break: break-all;
+}
+
+.confirmation-warning {
+  color: #f5a623;
+  font-weight: 600;
+}
+
+.confirmation-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.confirmation-deny,
+.confirmation-approve {
+  border: none;
+  border-radius: 8px;
+  padding: 8px 18px;
+  font-size: 13px;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+
+.confirmation-deny {
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.confirmation-deny:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.confirmation-approve {
+  background: rgba(130, 180, 255, 0.5);
+  color: #fff;
+}
+
+.confirmation-approve:hover {
+  background: rgba(130, 180, 255, 0.7);
+}
+
+.fatal-error-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(10, 10, 15, 0.92);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 300;
+  -webkit-app-region: no-drag;
+}
+
+.fatal-error-content {
+  text-align: center;
+  color: #fff;
+  padding: 30px;
+}
+
+.fatal-error-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: rgba(255, 80, 80, 0.3);
+  color: #ff5050;
+  font-size: 28px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 16px;
+}
+
+.fatal-error-message {
+  font-size: 14px;
+  line-height: 1.5;
+  margin-bottom: 8px;
+}
+
+.fatal-error-detail {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.5);
+  font-family: monospace;
+}
+
+.process-status-bar {
+  position: absolute;
+  bottom: 50px;
+  left: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  z-index: 5;
+  pointer-events: none;
+}
+
+.process-status {
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.4);
+  background: rgba(0, 0, 0, 0.3);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.process-crashed {
+  color: rgba(255, 100, 100, 0.7);
+}
+
+.process-restarting {
+  color: rgba(255, 200, 100, 0.7);
+}
+
+.process-ready {
+  color: rgba(100, 255, 100, 0.7);
+}

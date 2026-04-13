@@ -15,6 +15,9 @@ export default function App() {
   const [showChat, setShowChat] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [showSubtitles, setShowSubtitles] = useState(true);
+  const [fatalError, setFatalError] = useState<{ message: string; detail: string } | null>(null);
+  const [confirmationRequest, setConfirmationRequest] = useState<{ name: string; args: string; dangerous: boolean } | null>(null);
+  const [processStatuses, setProcessStatuses] = useState<Record<string, { status: string; attempt?: number }>>({});
   const avatarRef = useRef<AvatarHandle>(null);
 
   useEffect(() => {
@@ -28,6 +31,24 @@ export default function App() {
   useRPCEvent("speaking-state", ({ speaking }) => setIsSpeaking(speaking));
   useRPCEvent("visemes", ({ visemes }) => {
     avatarRef.current?.setVisemes(visemes);
+  });
+  useRPCEvent("tool-call-start", () => {
+    setExpression("alert");
+  });
+  useRPCEvent("tool-call-result", () => {
+    setExpression("neutral");
+  });
+  useRPCEvent("tool-confirmation-request", (data) => {
+    setConfirmationRequest(data);
+  });
+  useRPCEvent("fatal-error", (data) => {
+    setFatalError(data);
+  });
+  useRPCEvent("process-status", ({ name, status, attempt }) => {
+    setProcessStatuses((prev) => ({
+      ...prev,
+      [name]: { status, attempt },
+    }));
   });
 
   const handleChatSubmit = useCallback(
@@ -79,6 +100,40 @@ export default function App() {
       >
         ✏
       </button>
+      {confirmationRequest && (
+        <div className="confirmation-overlay">
+          <div className="confirmation-dialog">
+            <div className="confirmation-title">Confirm Action</div>
+            <div className="confirmation-body">
+              <p><strong>{confirmationRequest.name}</strong></p>
+              <p className="confirmation-args">{confirmationRequest.args}</p>
+              {confirmationRequest.dangerous && <p className="confirmation-warning">This action may be destructive.</p>}
+            </div>
+            <div className="confirmation-actions">
+              <button className="confirmation-deny" onClick={() => { emit("tool-confirmation-response", { approved: false }); setConfirmationRequest(null); }}>Deny</button>
+              <button className="confirmation-approve" onClick={() => { emit("tool-confirmation-response", { approved: true }); setConfirmationRequest(null); }}>Approve</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {fatalError && (
+        <div className="fatal-error-overlay">
+          <div className="fatal-error-content">
+            <div className="fatal-error-icon">!</div>
+            <div className="fatal-error-message">{fatalError.message}</div>
+            {fatalError.detail && <div className="fatal-error-detail">{fatalError.detail}</div>}
+          </div>
+        </div>
+      )}
+      {Object.keys(processStatuses).length > 0 && (
+        <div className="process-status-bar">
+          {Object.entries(processStatuses).map(([name, info]) => (
+            <span key={name} className={`process-status process-${info.status}`}>
+              {name}: {info.status}
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

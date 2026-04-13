@@ -1,4 +1,4 @@
-.PHONY: all dev build-rust build-go build-bun proto clean
+.PHONY: all dev build-rust build-go build-bun proto clean test-integration
 
 RUST_BINARY   = audio-engine/target/release/albedo-audio
 GO_BINARY     = daemon/cmd/albedo-daemon/albedo-daemon
@@ -86,3 +86,16 @@ clean:
 	rm -rf $(GO_PROTO_OUT)/*.pb.go
 	rm -rf $(TS_PROTO_OUT)
 	@echo "==> Clean done."
+
+test-integration: build-rust build-go
+	@echo "==> Starting native processes for integration test..."
+	$(BIN_DIR)/albedo-audio &
+	AUDIO_PID=$$!; \
+	$(BIN_DIR)/albedo-daemon & \
+	DAEMON_PID=$$!; \
+	sleep 2; \
+	bun run scripts/integration-test.ts; \
+	EXIT_CODE=$$?; \
+	kill $$AUDIO_PID $$DAEMON_PID 2>/dev/null; \
+	rm -f /tmp/albedo-audio.sock /tmp/albedo-daemon.sock; \
+	exit $$EXIT_CODE

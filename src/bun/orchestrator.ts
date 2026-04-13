@@ -1,5 +1,6 @@
+import { EventEmitter } from "events";
 import { AudioClient } from "./rpc/audio-client";
-import { DaemonClient, type ToolSchemaDef } from "./rpc/daemon-client";
+import { DaemonClient, type ToolSchemaDef, type AwarenessSnapshot } from "./rpc/daemon-client";
 import {
   GrokClient,
   type Message,
@@ -8,7 +9,6 @@ import {
 } from "./grok-client";
 import { ContextManager, SentenceDetector } from "./context-manager";
 import { Memory } from "./memory";
-import { config } from "./config";
 
 interface ToolsCache {
   tools: ToolSchemaDef[];
@@ -16,13 +16,16 @@ interface ToolsCache {
   expiry: number;
 }
 
-export class Orchestrator {
+const CONFIRMATION_TIMEOUT_MS = 15_000;
+
+export class Orchestrator extends EventEmitter {
   private audio: AudioClient;
   private daemon: DaemonClient;
   private grok: GrokClient;
   private context: ContextManager;
   private memory: Memory;
   private rpc: any;
+  private cfg: any;
 
   private toolsCache: ToolsCache | null = null;
   private ttsQueue: string[] = [];
@@ -31,23 +34,32 @@ export class Orchestrator {
   private started = false;
   private unsubTranscription: (() => void) | null = null;
 
-  constructor(rpc: any) {
-    this.rpc = rpc;
+  private isSpeaking = false;
+  private isProcessing = false;
+  private processingQueue: string[] = [];
+  private muted = false;
+  private pendingConfirmation: {
+    promise: Promise<boolean>;
+    resolve: (approved: boolean) => void;
+    timer: ReturnType<typeof setTimeout>;
+  } | null = null;
 
-    const audioSocket =
-      process.env.ALBEDO_AUDIO_SOCKET ?? "unix:///tmp/albedo-audio.sock";
-    const daemonSocket =
-      process.env.ALBEDO_DAEMON_SOCKET ?? "unix:///tmp/albedo-daemon.sock";
+  private lastCpuAlertTime = 0;
 
-    this.audio = new AudioClient(audioSocket);
-    this.daemon = new DaemonClient(daemonSocket);
-    this.grok = new GrokClient({
-      apiKey: process.env.XAI_API_KEY ?? "",
-      model: process.env.GROK_MODEL ?? "grok-4-fast",
-      baseUrl: "https://api.x.ai/v1",
-      maxTokens: 4096,
-      temperature: 0.7,
-    });
+  constructor(opts: {
+    audioClient: AudioClient;
+    daemonClient: DaemonClient;
+    grokClient: GrokClient;
+    rpc: any;
+    config: any;
+  }) {
+    super();
+    this.audio = opts.audioClient;
+    this.daemon = opts.daemonClient;
+    this.grok = opts.grokClient;
+    this.rpc = opts.rpc;
+    this.cfg = opts.config;
+
     this.memory = new Memory();
     this.context = new ContextManager();
 
@@ -63,9 +75,23 @@ export class Orchestrator {
     console.log("[orchestrator] starting...");
 
     try {
+      await this.audio.connect();
+      console.log("[orchestrator] audio client connected");
+    } catch (err: any) {
+      console.warn("[orchestrator] audio connect failed:", err.message);
+    }
+
+    try {
+      await this.daemon.connect();
+      console.log("[orchestrator] daemon client connected");
+    } catch (err: any) {
+      console.warn("[orchestrator] daemon connect failed:", err.message);
+    }
+
+    try {
       await this.audio.startCapture({
-        sampleRate: 16000,
-        vadThreshold: 0.5,
+        sampleRate: this.cfg.sampleRate ?? 16000,
+        vadThreshold: this.cfg.vadThreshold ?? 0.5,
       });
       console.log("[orchestrator] audio capture started");
     } catch (err: any) {
@@ -74,9 +100,14 @@ export class Orchestrator {
 
     try {
       this.daemon.streamAwareness(
-        { intervalMs: 5000, includeClipboard: true, includeScreenOcr: false },
+        {
+          intervalMs: this.cfg.awarenessIntervalMs ?? 5000,
+          includeClipboard: true,
+          includeScreenOcr: false,
+        },
         (snapshot) => {
           this.context.updateAwareness(snapshot);
+          this.checkCpuAlert(snapshot);
         }
       );
       console.log("[orchestrator] awareness stream started");
@@ -90,10 +121,19 @@ export class Orchestrator {
       }
     });
 
+    this.emit("state-change", "listening");
     console.log("[orchestrator] started");
   }
 
   async processUtterance(transcript: string): Promise<void> {
+    if (this.isProcessing || this.isSpeaking) {
+      this.processingQueue.push(transcript);
+      return;
+    }
+
+    this.isProcessing = true;
+    this.emit("state-change", "thinking");
+
     this.currentAbortController?.abort();
     this.ttsQueue = [];
     this.ttsRunning = false;
@@ -108,24 +148,15 @@ export class Orchestrator {
 
     try {
       const messages = this.context.buildMessages(transcript);
-      const { grokTools } = await this.getTools();
+      const { tools, grokTools } = await this.getTools();
 
       let fullResponse = "";
       const sentenceDetector = new SentenceDetector();
-      const toolCallResults: Array<{
-        id: string;
-        name: string;
-        arguments: string;
-      }> = [];
-      const rawToolCalls: Array<{
-        id: string;
-        type: "function";
-        function: { name: string; arguments: string };
-      }> = [];
 
       await this.streamWithToolLoop(
         messages,
         grokTools,
+        tools,
         ac.signal,
         (chunk) => {
           if (chunk.type === "content") {
@@ -136,18 +167,9 @@ export class Orchestrator {
               this.enqueueSentence(sentence);
             }
           } else if (chunk.type === "tool_call") {
-            toolCallResults.push({
-              id: chunk.id,
+            this.rpc.send("tool-call-start", {
               name: chunk.name,
-              arguments: chunk.arguments,
-            });
-            rawToolCalls.push({
-              id: chunk.id,
-              type: "function",
-              function: {
-                name: chunk.name,
-                arguments: chunk.arguments,
-              },
+              args: chunk.arguments,
             });
           }
         }
@@ -167,22 +189,82 @@ export class Orchestrator {
       const expression = this.inferExpression(fullResponse);
       this.rpc.send("set-expression", { expression });
     } catch (err: any) {
-      if (err.name === "AbortError") return;
-      console.error("[orchestrator] error processing utterance:", err);
-      this.rpc.send("subtitle", {
-        text: "Sorry, I encountered an error.",
-      });
+      if (err.name === "AbortError") {
+        // aborted by new utterance, not an error
+      } else {
+        console.error("[orchestrator] error processing utterance:", err);
+
+        const status = err.status ?? err.statusCode ?? 0;
+        let userMessage = "Sorry, I ran into an issue. Let me try again.";
+
+        if (status === 401) {
+          userMessage = "Sorry, there's an authentication issue with the AI service. Please check your API key.";
+        } else if (status === 429) {
+          userMessage = "Sorry, the AI service is rate-limited. Please wait a moment and try again.";
+        } else if (status >= 500) {
+          userMessage = "Sorry, the AI service is having problems. Let me try again shortly.";
+        } else if (err.code === "ECONNREFUSED" || err.code === "ENOTFOUND" || err.code === "ERR_NETWORK") {
+          userMessage = "Sorry, I can't reach the AI service. Please check your internet connection.";
+        }
+
+        this.rpc.send("error", { message: userMessage });
+        this.rpc.send("subtitle", { text: userMessage });
+
+        if (this.ttsQueue.length > 0) {
+          await this.drainTtsQueue();
+        }
+
+        try {
+          await this.speakSentence(this.cleanForTTS(userMessage) || userMessage);
+        } catch (ttsErr: any) {
+          console.warn("[orchestrator] fallback TTS failed:", ttsErr.message);
+        }
+      }
     } finally {
       if (this.currentAbortController === ac) {
         this.currentAbortController = null;
       }
       this.rpc.send("speaking-state", { speaking: false });
+      this.isProcessing = false;
+
+      if (this.processingQueue.length > 0) {
+        const next = this.processingQueue.shift()!;
+        setImmediate(() => this.processUtterance(next));
+      } else {
+        this.emit("state-change", "listening");
+      }
     }
+  }
+
+  handleConfirmationResponse(approved: boolean): void {
+    if (this.pendingConfirmation) {
+      clearTimeout(this.pendingConfirmation.timer);
+      this.pendingConfirmation.resolve(approved);
+      this.pendingConfirmation = null;
+    }
+  }
+
+  private async confirmTool(name: string, args: string): Promise<boolean> {
+    this.rpc.send("tool-confirmation-request", {
+      name,
+      args,
+      dangerous: true,
+    });
+
+    return new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => {
+        this.pendingConfirmation = null;
+        resolve(false);
+      }, CONFIRMATION_TIMEOUT_MS);
+
+      this.pendingConfirmation = { promise: Promise.resolve(false), resolve, timer };
+    });
   }
 
   private async streamWithToolLoop(
     messages: Message[],
     tools: ToolDef[],
+    toolSchemas: ToolSchemaDef[],
     signal: AbortSignal,
     onChunk: (chunk: StreamChunk) => void,
     depth = 0
@@ -227,8 +309,38 @@ export class Orchestrator {
 
     const toolMessages: Message[] = [];
     for (const tc of toolCallResults) {
+      const schema = toolSchemas.find((s) => s.name === tc.name);
+
+      if (schema?.dangerous) {
+        const approved = await this.confirmTool(tc.name, tc.arguments);
+        if (!approved) {
+          this.rpc.send("tool-call-result", {
+            name: tc.name,
+            result: "Tool call rejected by user.",
+            success: false,
+          });
+          toolMessages.push({
+            role: "tool",
+            tool_call_id: tc.id,
+            name: tc.name,
+            content: "The user declined to execute this tool. Respond accordingly and suggest an alternative if possible.",
+          });
+          continue;
+        }
+      }
+
       try {
         const result = await this.daemon.executeTool(tc.name, tc.arguments);
+
+        const truncated = result.result.length > 500
+          ? result.result.slice(0, 500) + "..."
+          : result.result;
+
+        this.rpc.send("tool-call-result", {
+          name: tc.name,
+          result: truncated,
+          success: result.success,
+        });
 
         const screenshotMatch = result.result?.match(
           /^\[SCREENSHOT:(\d+)x(\d+):(.+)\]$/
@@ -252,6 +364,11 @@ export class Orchestrator {
           });
         }
       } catch (err: any) {
+        this.rpc.send("tool-call-result", {
+          name: tc.name,
+          result: `Error: ${err.message}`,
+          success: false,
+        });
         toolMessages.push({
           role: "tool",
           tool_call_id: tc.id,
@@ -274,6 +391,7 @@ export class Orchestrator {
     await this.streamWithToolLoop(
       continuationMessages,
       tools,
+      toolSchemas,
       signal,
       onChunk,
       depth + 1
@@ -284,7 +402,11 @@ export class Orchestrator {
     const cleaned = this.cleanForTTS(sentence);
     if (!cleaned) return;
     this.ttsQueue.push(cleaned);
-    if (!this.ttsRunning) this.drainTtsQueue();
+    if (!this.ttsRunning) {
+      this.isSpeaking = true;
+      this.emit("state-change", "speaking");
+      this.drainTtsQueue();
+    }
   }
 
   private async drainTtsQueue(): Promise<void> {
@@ -294,14 +416,17 @@ export class Orchestrator {
       await this.speakSentence(sentence);
     }
     this.ttsRunning = false;
+    this.isSpeaking = false;
   }
 
   private async speakSentence(sentence: string): Promise<void> {
     try {
-      const voiceSpeed = Number(config.get("voice-speed")) || 1.0;
+      const voiceSpeed = typeof this.cfg.defaultVoiceSpeed === "number"
+        ? this.cfg.defaultVoiceSpeed
+        : 1.0;
       const result = await this.audio.synthesize({
         text: sentence,
-        voiceId: "default",
+        voiceId: this.cfg.defaultVoiceId ?? "default",
         speed: voiceSpeed,
       });
 
@@ -389,19 +514,69 @@ export class Orchestrator {
     return "neutral";
   }
 
+  private async proactiveSpeak(text: string): Promise<void> {
+    if (this.isSpeaking || this.isProcessing) return;
+    this.isSpeaking = true;
+    this.emit("state-change", "speaking");
+    await this.speakSentence(this.cleanForTTS(text) || text);
+    this.rpc.send("subtitle", { text });
+    this.isSpeaking = false;
+    this.emit("state-change", "listening");
+  }
+
+  private static readonly CPU_ALERT_COOLDOWN_MS = 300_000;
+
+  private checkCpuAlert(snapshot: AwarenessSnapshot): void {
+    const threshold = this.cfg.cpuAlertThreshold ?? 90;
+    if (snapshot.metrics && snapshot.metrics.cpuPercent > threshold) {
+      const now = Date.now();
+      if (now - this.lastCpuAlertTime > Orchestrator.CPU_ALERT_COOLDOWN_MS) {
+        this.lastCpuAlertTime = now;
+        this.proactiveSpeak(
+          `Your CPU usage is above ${threshold}%. You might want to close some applications.`
+        );
+      }
+    }
+  }
+
+  setMuted(muted: boolean): void {
+    this.muted = muted;
+    if (muted) {
+      try {
+        this.audio.stopCapture();
+      } catch (err: any) {
+        console.warn("[orchestrator] stopCapture on mute failed:", err.message);
+      }
+      this.emit("state-change", "idle");
+    } else {
+      try {
+        this.audio.startCapture({
+          sampleRate: this.cfg.sampleRate ?? 16000,
+          vadThreshold: this.cfg.vadThreshold ?? 0.5,
+        });
+      } catch (err: any) {
+        console.warn("[orchestrator] startCapture on unmute failed:", err.message);
+      }
+      this.emit("state-change", "listening");
+    }
+  }
+
   async stop(): Promise<void> {
     this.currentAbortController?.abort();
     this.currentAbortController = null;
 
     this.ttsQueue = [];
     this.ttsRunning = false;
-
-    this.daemon.stopAwarenessStream();
+    this.isSpeaking = false;
+    this.isProcessing = false;
+    this.processingQueue = [];
 
     if (this.unsubTranscription) {
       this.unsubTranscription();
       this.unsubTranscription = null;
     }
+
+    this.daemon.stopAwarenessStream();
 
     try {
       await this.audio.stopCapture();
@@ -409,11 +584,22 @@ export class Orchestrator {
       console.warn("[orchestrator] stopCapture error during shutdown:", err.message);
     }
 
-    this.audio.close();
-    this.daemon.close();
+    try {
+      await this.audio.disconnect();
+    } catch (err: any) {
+      console.warn("[orchestrator] audio disconnect error:", err.message);
+    }
+
+    try {
+      await this.daemon.disconnect();
+    } catch (err: any) {
+      console.warn("[orchestrator] daemon disconnect error:", err.message);
+    }
+
     this.memory.close();
 
     this.started = false;
+    this.removeAllListeners();
     console.log("[orchestrator] stopped");
   }
 }

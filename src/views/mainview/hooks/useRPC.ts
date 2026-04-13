@@ -1,11 +1,11 @@
 import { useEffect, useCallback, useRef } from "react";
 import type {
-  MainToWebviewEvents,
-  WebviewToMainEvents,
+  MainToViewEvents,
+  ViewToMainEvents,
 } from "../types/rpc";
 
-type EventHandler<K extends keyof MainToWebviewEvents> = (
-  payload: MainToWebviewEvents[K]
+type EventHandler<K extends keyof MainToViewEvents> = (
+  payload: MainToViewEvents[K]
 ) => void;
 
 type AnyHandler = (payload: any) => void;
@@ -34,7 +34,7 @@ export function initRpc(rpc: BrowserRPC): void {
 
 export function useRPC() {
   const on = useCallback(
-    <K extends keyof MainToWebviewEvents>(
+    <K extends keyof MainToViewEvents>(
       event: K,
       handler: EventHandler<K>
     ): (() => void) => {
@@ -53,9 +53,9 @@ export function useRPC() {
   );
 
   const emit = useCallback(
-    <K extends keyof WebviewToMainEvents>(
+    <K extends keyof ViewToMainEvents>(
       event: K,
-      payload: WebviewToMainEvents[K]
+      payload: ViewToMainEvents[K]
     ): void => {
       const rpc = getRpc();
       if (rpc?.sendProxy && (rpc.sendProxy as any)[event as string]) {
@@ -72,7 +72,7 @@ export function useRPC() {
   return { on, emit };
 }
 
-export function useRPCEvent<K extends keyof MainToWebviewEvents>(
+export function useRPCEvent<K extends keyof MainToViewEvents>(
   event: K,
   handler: EventHandler<K>
 ): void {
