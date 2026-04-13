@@ -86,11 +86,11 @@ Verify the module declaration is `module albedo-ai/daemon` and set `go 1.22`.
 
 ```bash
 cd daemon
-go get google.golang.org/grpc@v1.64.0
-go get google.golang.org/protobuf@v1.34.1
-go get github.com/go-vgo/robotgo@v0.110.3
+go get google.golang.org/grpc@v1.65.0
+go get google.golang.org/protobuf@v1.34.2
+go get github.com/go-vgo/robotgo@v0.110.5
 go get github.com/kbinani/screenshot@v0.0.0-20230812210009-b87d31814237
-go get github.com/shirou/gopsutil/v3@v3.24.4
+go get github.com/shirou/gopsutil/v3@v3.24.5
 go get github.com/go-rod/rod@v0.116.0
 go get golang.design/x/clipboard@v0.7.0
 go get github.com/gen2brain/beeep@v0.0.0-20240516210008-9c006672e7f4
@@ -1061,8 +1061,15 @@ func (s *daemonServer) ListTools(ctx context.Context, _ *pb.Empty) (*pb.ToolList
 
 **`main()` startup sequence:**
 
+> **Note:** `collector.Start()` must be called immediately after `NewCollector()`. It launches the background polling goroutines for active window tracking, clipboard monitoring, and system metrics collection. Without this call, the awareness goroutines never launch and all snapshots return zero values.
+
+> **Note:** `signal.NotifyContext` is used instead of a raw `signal.Notify` channel. This enables clean shutdown when the Bun orchestrator kills the daemon process (via SIGTERM) or when the user interrupts it (SIGINT). The returned `ctx` is passed to the shutdown goroutine; `defer stop()` releases the signal registration when `main` exits. `os/signal` and `syscall` are required imports for this pattern.
+
 ```go
 func main() {
+    ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+    defer stop()
+
     socketPath := "/tmp/albedo-daemon.sock"
     os.Remove(socketPath)
 
@@ -1073,7 +1080,7 @@ func main() {
 
     // Init subsystems
     collector := awareness.NewCollector()
-    collector.Start()
+    collector.Start() // launches background polling goroutines for window/clipboard/metrics
 
     registry := actions.NewRegistry()
     actions.RegisterDefaults(registry)
@@ -1097,21 +1104,18 @@ func main() {
         sandbox:   sandbox,
     })
 
-    // Graceful shutdown on SIGINT/SIGTERM
-    sigCh := make(chan os.Signal, 1)
-    signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+    // Graceful shutdown: signals from the Bun orchestrator (SIGTERM) or the user
+    // (SIGINT) cancel ctx, triggering GracefulStop so in-flight RPCs complete cleanly.
     go func() {
-        <-sigCh
-        log.Println("[albedo-daemon] shutting down")
+        <-ctx.Done()
+        log.Println("[albedo-daemon] Shutting down gracefully...")
         grpcServer.GracefulStop()
         collector.Stop()
         os.Remove(socketPath)
     }()
 
-    log.Printf("[albedo-daemon] listening on %s", socketPath)
-    if err := grpcServer.Serve(lis); err != nil {
-        log.Fatalf("[albedo-daemon] serve: %v", err)
-    }
+    log.Printf("[albedo-daemon] Listening on %s", socketPath)
+    grpcServer.Serve(lis)
 }
 ```
 
@@ -1534,11 +1538,11 @@ The phase is complete when all of the following are true:
 ### Exact Go Module Versions
 
 ```
-google.golang.org/grpc             v1.64.0
-google.golang.org/protobuf         v1.34.1
-github.com/go-vgo/robotgo          v0.110.3
+google.golang.org/grpc             v1.65.0
+google.golang.org/protobuf         v1.34.2
+github.com/go-vgo/robotgo          v0.110.5
 github.com/kbinani/screenshot      v0.0.0-20230812210009-b87d31814237
-github.com/shirou/gopsutil/v3      v3.24.4
+github.com/shirou/gopsutil/v3      v3.24.5
 github.com/go-rod/rod              v0.116.0
 golang.design/x/clipboard          v0.7.0
 github.com/gen2brain/beeep         v0.0.0-20240516210008-9c006672e7f4

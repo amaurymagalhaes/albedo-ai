@@ -107,7 +107,7 @@ prost       = "0.13"
 tokio       = { version = "1", features = ["full"] }
 cpal        = "0.15"
 whisper-rs  = "0.14"
-ort         = { version = "2.0", features = ["download-binaries"] }
+ort         = { version = "2.0", features = ["load-dynamic"] }
 ndarray     = "0.16"
 rubato      = "0.16"
 hound       = "3.5"
@@ -120,7 +120,7 @@ tokio-stream = "0.1"
 tonic-build = "0.13"
 ```
 
-The `ort` crate's `download-binaries` feature fetches the ONNX Runtime shared library automatically during `cargo build` — this avoids a manual installation step. Remove this feature if you want to link against a system-installed ONNX Runtime.
+The `ort` crate uses the `load-dynamic` feature, which loads the ONNX Runtime shared library at runtime from the system path rather than downloading or statically linking it at compile time. This matches Phase 2 (TTS) and is better for distribution. **`libonnxruntime.so` (Linux), `libonnxruntime.dylib` (macOS), or `onnxruntime.dll` (Windows) must be installed on the system or pointed to via the `ORT_DYLIB_PATH` environment variable.**
 
 ---
 
@@ -653,10 +653,56 @@ async fn stream_stt(
         let mut speech_buffer: Vec<f32> = Vec::new();
         let mut silence_count: u32 = 0;
         let mut speech_count: u32 = 0;
+        let mut last_transcription: String = String::new();
 
-        const SPEECH_ONSET: u32 = 3;    // chunks before declaring speech start
-        const SILENCE_END: u32 = 8;     // silence chunks before flushing utterance
+        const SPEECH_ONSET: u32 = 3;    // consecutive speech chunks to transition SILENCE → SPEECH
+        const SILENCE_END: u32 = 8;     // consecutive silence chunks to flush in POST_SPEECH (~256 ms)
+        const MAX_BUFFER_SAMPLES: usize = 30 * 16000; // 30-second hard cap at 16 kHz
         let mut state = VadState::Silence;
+
+        // Helper: flush speech_buffer to Whisper and send result downstream.
+        // Filters out Whisper hallucinations and repeated transcriptions.
+        macro_rules! flush_buffer {
+            ($buf:expr, $ts:expr) => {{
+                let buf = $buf;
+                let ts = $ts;
+                let tx2 = tx.clone();
+                let w2 = whisper.clone();
+                let last = last_transcription.clone();
+                tokio::spawn(async move {
+                    match w2.transcribe_async(buf).await {
+                        Ok(text) => {
+                            // Hallucination filter: skip empty, whitespace-only, artifact
+                            // strings, results shorter than 3 chars, and exact repeats.
+                            let trimmed = text.trim();
+                            let is_artifact = matches!(
+                                trimmed,
+                                "[BLANK_AUDIO]" | "(music)" | "(inaudible)" | "[BLANK_AUDIO] "
+                            ) || trimmed.starts_with('[') && trimmed.ends_with(']')
+                              || trimmed.starts_with('(') && trimmed.ends_with(')');
+                            if trimmed.is_empty()
+                                || trimmed.len() < 3
+                                || is_artifact
+                                || trimmed == last.trim()
+                            {
+                                return; // discard hallucination or repeat
+                            }
+                            let _ = tx2.send(Ok(TranscriptionResult {
+                                text: trimmed.to_string(),
+                                confidence: 0.9,
+                                is_final: true,
+                                timestamp_ms: ts,
+                            })).await;
+                        }
+                        Err(e) => {
+                            let _ = tx2.send(Err(
+                                Status::internal(e.to_string())
+                            )).await;
+                        }
+                    }
+                });
+            }};
+        }
 
         while let Ok(Some(chunk)) = inbound.message().await {
             // Decode f32le PCM from bytes
@@ -671,7 +717,14 @@ async fn stream_stt(
                 v.is_speech(&samples).unwrap_or(false)
             };
 
-            // State machine
+            // 3-state VAD machine:
+            //   SILENCE     — waiting for speech onset (requires SPEECH_ONSET consecutive
+            //                 speech frames before transitioning to SPEECH)
+            //   SPEECH      — accumulating audio; stays here while speech continues
+            //   POST_SPEECH — detected silence after speech; waits SILENCE_END consecutive
+            //                 silence frames before flushing to Whisper. Returns to SPEECH
+            //                 immediately on any speech frame, preventing mid-utterance
+            //                 pauses from triggering premature Whisper calls.
             match state {
                 VadState::Silence => {
                     if is_speech {
@@ -688,37 +741,39 @@ async fn stream_stt(
                 VadState::Speech => {
                     speech_buffer.extend_from_slice(&samples);
                     if !is_speech {
-                        silence_count += 1;
-                        if silence_count >= SILENCE_END {
-                            // Flush utterance
+                        silence_count = 1;
+                        state = VadState::PostSpeech;
+                    } else {
+                        // 30-second max buffer cap: force flush if buffer grows too large
+                        // (e.g., continuous monologue with no silence). Prevents unbounded
+                        // memory growth.
+                        if speech_buffer.len() >= MAX_BUFFER_SAMPLES {
                             let buf = std::mem::take(&mut speech_buffer);
                             let ts = chunk.timestamp_ms;
-                            let tx2 = tx.clone();
-                            let w2 = whisper.clone();
-                            tokio::spawn(async move {
-                                match w2.transcribe_async(buf).await {
-                                    Ok(text) if !text.is_empty() => {
-                                        let _ = tx2.send(Ok(TranscriptionResult {
-                                            text,
-                                            confidence: 0.9,
-                                            is_final: true,
-                                            timestamp_ms: ts,
-                                        })).await;
-                                    }
-                                    Ok(_) => {} // Empty transcription, discard
-                                    Err(e) => {
-                                        let _ = tx2.send(Err(
-                                            Status::internal(e.to_string())
-                                        )).await;
-                                    }
-                                }
-                            });
+                            flush_buffer!(buf, ts);
                             state = VadState::Silence;
                             silence_count = 0;
                             speech_count = 0;
                         }
-                    } else {
+                    }
+                }
+                VadState::PostSpeech => {
+                    if is_speech {
+                        // Mid-utterance pause: return to SPEECH without flushing
+                        speech_buffer.extend_from_slice(&samples);
                         silence_count = 0;
+                        state = VadState::Speech;
+                    } else {
+                        silence_count += 1;
+                        if silence_count >= SILENCE_END {
+                            // End of utterance confirmed: flush to Whisper
+                            let buf = std::mem::take(&mut speech_buffer);
+                            let ts = chunk.timestamp_ms;
+                            flush_buffer!(buf, ts);
+                            state = VadState::Silence;
+                            silence_count = 0;
+                            speech_count = 0;
+                        }
                     }
                 }
             }
@@ -727,9 +782,19 @@ async fn stream_stt(
         // Stream ended: flush any remaining buffer
         if !speech_buffer.is_empty() {
             if let Ok(text) = whisper.transcribe_async(speech_buffer).await {
-                if !text.is_empty() {
+                let trimmed = text.trim();
+                let is_artifact = matches!(
+                    trimmed,
+                    "[BLANK_AUDIO]" | "(music)" | "(inaudible)"
+                ) || trimmed.starts_with('[') && trimmed.ends_with(']')
+                  || trimmed.starts_with('(') && trimmed.ends_with(')');
+                if !trimmed.is_empty()
+                    && trimmed.len() >= 3
+                    && !is_artifact
+                    && trimmed != last_transcription.trim()
+                {
                     let _ = tx.send(Ok(TranscriptionResult {
-                        text,
+                        text: trimmed.to_string(),
                         confidence: 0.9,
                         is_final: true,
                         timestamp_ms: 0,
@@ -742,7 +807,7 @@ async fn stream_stt(
     Ok(Response::new(ReceiverStream::new(rx)))
 }
 
-enum VadState { Silence, Speech }
+enum VadState { Silence, Speech, PostSpeech }
 ```
 
 ### 6.4 gRPC server binding
@@ -834,7 +899,7 @@ let session = SessionBuilder::new()?
 
 **Load time:** ~50 ms for `silero_vad.onnx` (~2 MB model).
 
-**ONNX Runtime version:** `ort` v2.x targets ONNX Runtime 1.19.x. The `download-binaries` feature in `Cargo.toml` downloads the correct version automatically. Do not mix with a system-installed ORT of a different version.
+**ONNX Runtime version:** `ort` v2.x targets ONNX Runtime 1.19.x. The `load-dynamic` feature in `Cargo.toml` loads the library from the system at runtime (consistent with Phase 2 TTS). Ensure the installed ONNX Runtime version matches the version `ort` v2.x expects (1.19.x). Set `ORT_DYLIB_PATH` if the library is not on the default linker path.
 
 **Input/output tensor names for Silero VAD v5:**
 
@@ -956,6 +1021,31 @@ mod tests {
         let result = engine.transcribe(&silence).unwrap();
         // Whisper may return empty string or hallucinate slightly — acceptable
         println!("Silence transcription: '{}'", result);
+    }
+
+    #[test]
+    fn test_hallucination_filter() {
+        // Verify that known Whisper artifact strings are correctly identified as
+        // hallucinations and would be discarded by the filter in stream_stt.
+        let artifacts = &[
+            "[BLANK_AUDIO]",
+            "(music)",
+            "(inaudible)",
+            "  ",   // whitespace only
+            "ok",   // fewer than 3 chars
+            "",     // empty
+        ];
+        for s in artifacts {
+            let trimmed = s.trim();
+            let is_artifact = matches!(trimmed, "[BLANK_AUDIO]" | "(music)" | "(inaudible)")
+                || (trimmed.starts_with('[') && trimmed.ends_with(']'))
+                || (trimmed.starts_with('(') && trimmed.ends_with(')'));
+            let should_discard = trimmed.is_empty() || trimmed.len() < 3 || is_artifact;
+            assert!(
+                should_discard,
+                "Expected '{}' to be discarded by hallucination filter", s
+            );
+        }
     }
 }
 ```
@@ -1129,6 +1219,10 @@ Phase 1 is complete when **all** of the following pass:
    ```
    [StreamSTT] "Hello, this is a test of the audio engine."
    ```
+
+7. **Hallucination filter:** Feed 3 seconds of silence through `StreamSTT`. No `TranscriptionResult` should be emitted. Known artifact strings (`[BLANK_AUDIO]`, `(music)`, `(inaudible)`) must be suppressed and not forwarded to the gRPC response stream.
+
+8. **30-second buffer cap:** Stream more than 30 seconds of continuous speech (no silence pauses) through `StreamSTT`. The implementation must force-flush to Whisper at the 30-second mark and reset the buffer, rather than accumulating audio indefinitely. Verify via log output (`tracing::debug!`) that the forced flush occurs and that memory usage does not grow unboundedly during long monologues.
 
 ---
 

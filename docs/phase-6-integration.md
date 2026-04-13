@@ -36,7 +36,7 @@ Additionally, ensure:
 
 - `XAI_API_KEY` is set and a test call to `https://api.x.ai/v1/chat/completions` succeeds.
 - `bin/albedo-audio` and `bin/albedo-daemon` are compiled release binaries present in the `bin/` directory.
-- Model files are present: `assets/whisper/ggml-base.bin`, `assets/voices/default.onnx`, and Live2D model assets under `assets/models/`.
+- Model files are present: `assets/whisper/ggml-base.bin`, `assets/voices/kokoro-v0_19.onnx`, `assets/voices/voices.bin`, and Live2D model assets under `assets/models/`.
 
 ---
 
@@ -253,6 +253,54 @@ Wrap the entire method body in a try/catch. On error:
 - If it is a gRPC error from the audio or daemon client, log it and attempt to continue if possible.
 - Speak a fallback phrase via direct TTS if the error is non-fatal: `"Sorry, I ran into an issue. Let me try again."`.
 
+**5f. State-change event emitter for tray icon**
+
+`Orchestrator` must extend `EventEmitter` so `index.ts` can subscribe to pipeline state transitions without the orchestrator holding a direct reference to `Tray`.
+
+Add `extends EventEmitter` to the class declaration and emit a `"state-change"` event at each major pipeline transition:
+
+```typescript
+import { EventEmitter } from "events";
+
+export class Orchestrator extends EventEmitter {
+  // ... existing fields ...
+  private isSpeaking = false;
+
+  async processUtterance(text: string): Promise<void> {
+    // After STT result arrives and processing begins:
+    this.emit("state-change", "thinking");
+
+    // When the first TTS sentence starts playing:
+    this.isSpeaking = true;
+    this.emit("state-change", "speaking");
+
+    // When TTS finishes and mic capture resumes:
+    this.isSpeaking = false;
+    this.emit("state-change", "listening");
+  }
+
+  // Emit "listening" when mic capture starts (after start() or unmute):
+  async start(): Promise<void> {
+    // ... existing start logic ...
+    this.emit("state-change", "listening");
+  }
+
+  // Emit "error" on unrecoverable pipeline errors:
+  // this.emit("state-change", "error");
+}
+```
+
+**5g. `isSpeaking` guard in `proactiveSpeak()`**
+
+Proactive TTS alerts (e.g. CPU warning) must not fire while the orchestrator is already speaking a response. Add an early-return guard:
+
+```typescript
+private async proactiveSpeak(text: string): Promise<void> {
+  if (this.isSpeaking) return;
+  // ... existing proactiveSpeak logic ...
+}
+```
+
 ---
 
 ### Task 6 — Implement `src/bun/context-manager.ts`
@@ -426,7 +474,14 @@ pm.on("fatal-crash", ({ name }) => {
   });
 });
 
-// ─── 8. Graceful shutdown ───
+// ─── 8. Wire orchestrator state changes to tray icon ───
+
+orchestrator.on("state-change", (state: "listening" | "thinking" | "speaking" | "error") => {
+  tray.setIcon(`assets/icons/tray-${state}.png`);
+  tray.setTooltip(`Albedo AI — ${state}`);
+});
+
+// ─── 9. Graceful shutdown ───
 
 async function shutdown(code: number) {
   console.log("[index] Shutting down...");
@@ -638,7 +693,9 @@ async shutdown(): Promise<void> {
     }
     // Clean up socket files
     try {
-      await Bun.file(mp.socketPath).exists() && fs.unlinkSync(mp.socketPath);
+      if (await Bun.file(mp.socketPath).exists()) {
+        fs.unlinkSync(mp.socketPath);
+      }
     } catch { /* ignore if already gone */ }
   }
   this.emit("shutdown-complete");

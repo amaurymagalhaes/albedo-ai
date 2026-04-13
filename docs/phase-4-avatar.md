@@ -135,6 +135,8 @@ export interface MainToWebviewEvents {
   "set-expression": { expression: ExpressionName };
   /** Open settings panel */
   "open-settings": void;
+  /** TTS speaking state: true when playback starts, false when TTS queue is empty and playback finishes */
+  "speaking-state": { speaking: boolean };
 }
 
 /** Events emitted FROM webview TO main process */
@@ -339,19 +341,22 @@ interface AvatarProps {
 
 ### 4.2 `Subtitles.tsx`
 
-**Responsibility:** Displays the current subtitle text as a styled overlay beneath the avatar. Subtitles fade in on arrival and fade out after a timeout or when the next subtitle replaces them.
+**Responsibility:** Displays the current subtitle text as a styled overlay beneath the avatar. Subtitles fade in on arrival and fade out when the orchestrator signals that TTS playback has finished.
 
 **Props:**
 ```typescript
 interface SubtitlesProps {
   text: string;        // Current subtitle text (empty string = hidden)
+  isSpeaking: boolean; // True while TTS playback is active (driven by "speaking-state" RPC event)
   speakerLabel?: string; // Optional: "Albedo" | "You"
 }
 ```
 
 **Behavior:**
 - When `text` changes to a non-empty string, trigger a CSS fade-in animation.
-- After 4 seconds of no update, or when `text` becomes empty, trigger a CSS fade-out.
+- When `isSpeaking` transitions to `false`, wait 500ms then trigger a CSS fade-out. This small delay prevents an abrupt disappearance at the exact moment playback ends.
+- Do **not** use a fixed timer (e.g., 4 seconds) to hide subtitles — a sentence may still be playing when such a timer fires, causing the text to vanish mid-speech.
+- `isSpeaking` is set to `true` when the orchestrator begins TTS playback and reset to `false` when the TTS queue is empty and the audio engine reports playback complete, both signalled via the `speaking-state` RPC event.
 - Display user speech (from `user-speech` RPC event) with a distinct label and style.
 
 ---
@@ -1329,7 +1334,7 @@ Phase 4 is complete when all of the following pass:
 | 4 | Lips move in sync with TTS speech | Run `make dev`, speak to Albedo, observe mouth movement during response |
 | 5 | Lip sync timing is within ~100ms of audio | Compare visual mouth open against audio output spectrogram |
 | 6 | Subtitles appear when Albedo speaks | Subtitle text appears below avatar for each sentence |
-| 7 | Subtitles fade out after speech ends | Text disappears ~4s after last subtitle update |
+| 7 | Subtitles fade out after speech ends | Text disappears ~500ms after `speaking-state: false` is received |
 | 8 | User speech subtitle appears | Speak to Albedo, see transcription appear with "You" label |
 | 9 | Expressions change correctly | Say something funny → happy expression; trigger alert condition → alert expression |
 | 10 | Expression transitions are smooth | No snapping — parameters blend over ~500ms |
@@ -1374,6 +1379,8 @@ Key restrictions:
   }
   ```
 - Monitor the `pixi-live2d-display` repository for a v8-compatible release.
+
+> **Post-MVP tech debt:** After MVP ships, evaluate `@guansss/pixi-live2d-display`, the actively maintained fork that targets PixiJS v8. PixiJS v8 has been stable since early 2025 and the v7 branch now receives only security patches. Migrating would unblock the full PixiJS v8 feature set and future ecosystem compatibility. See also Section 13.7 below.
 
 ### 13.3 WebGL Performance in the System Webview
 
@@ -1427,6 +1434,25 @@ If `Live2DModel.from()` is called before the Cubism Core WASM module has finishe
   const model = await Live2DModel.from(modelPath);
   ```
 - Or, if the WASM is bundled inline, import it as a module and await its initialization promise before mounting `Avatar.tsx`.
+
+### 13.7 Post-MVP: Migrate to `@guansss/pixi-live2d-display` (PixiJS v8)
+
+**Priority: Post-MVP tech debt**
+
+The current plan deliberately locks to `pixi-live2d-display@0.4.x` + `pixi.js@7.4.x` because the original plugin has not been updated for PixiJS v8's rewritten renderer API. This is the correct call for MVP, but it creates long-term maintenance drag:
+
+- PixiJS v7 receives **security patches only** as of early 2025. No new features will land on the v7 branch.
+- PixiJS v8 has been stable since early 2025 and is the current actively developed version.
+- The original `pixi-live2d-display` repository appears stagnant; community maintenance has moved to the v8-compatible fork.
+
+**After MVP ships, evaluate the following migration path:**
+
+1. Replace `pixi-live2d-display@0.4.x` with `@guansss/pixi-live2d-display` (the actively maintained v8 fork).
+2. Upgrade `pixi.js` from `7.4.x` to `8.x`.
+3. Audit any call sites that use PixiJS v7-only APIs (primarily `backgroundAlpha` → `background` with an alpha channel in v8, and `PIXI.utils.*` which was reorganised in v8).
+4. Remove the `overrides.pixi.js` pin from `package.json` once the migration is complete.
+
+This migration is **not required for MVP** and should not be started mid-phase. Timebox the evaluation to one day post-MVP to decide whether the migration effort is justified at that point.
 
 ---
 

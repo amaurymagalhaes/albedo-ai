@@ -73,9 +73,7 @@ Add the following runtime dependencies:
 
 ```json
 "@grpc/grpc-js": "^1.10.0",
-"@grpc/proto-loader": "^0.7.13",
-"better-sqlite3": "^9.4.3",
-"@types/better-sqlite3": "^7.6.8"
+"@grpc/proto-loader": "^0.7.13"
 ```
 
 Add dev dependencies:
@@ -226,6 +224,10 @@ export class AudioClient extends EventEmitter {
   }
 
   private connect() {
+    // Close the previous client before creating a new one to avoid leaking
+    // file handles on each reconnect attempt.
+    this.client?.close();
+
     const packageDef = protoLoader.loadSync(
       path.resolve(import.meta.dir, "../../../proto/audio.proto"),
       { keepCase: true, longs: String, enums: String, defaults: true, oneofs: true }
@@ -235,6 +237,11 @@ export class AudioClient extends EventEmitter {
       this.address,
       grpc.credentials.createInsecure()
     );
+  }
+
+  /** Closes the underlying gRPC channel. Called by `Orchestrator.stop()`. */
+  close() {
+    this.client?.close();
   }
 
   async startCapture(config: { sampleRate: number; vadThreshold: number }) {
@@ -310,6 +317,30 @@ This avoids the orchestrator having to relay raw PCM and lets the Rust side own 
 | `listTools()` | `ListTools` | `ToolSchema[]` |
 
 **`streamAwareness` implementation detail:** Opens a server-streaming call. Calls the callback for each received snapshot. Automatically restarts the stream on error after a 2s delay. Exposes a `stopAwarenessStream()` method that cancels the call.
+
+**Reconnect strategy:** Mirrors `AudioClient`. Call `this.client?.close()` before instantiating a new `grpc.Client` during every reconnect attempt to avoid leaking file handles:
+
+```typescript
+private connect() {
+  // Release the previous channel before opening a new one.
+  this.client?.close();
+
+  const packageDef = protoLoader.loadSync(
+    path.resolve(import.meta.dir, "../../../proto/daemon.proto"),
+    { keepCase: true, longs: String, enums: String, defaults: true, oneofs: true }
+  );
+  const proto = grpc.loadPackageDefinition(packageDef) as any;
+  this.client = new proto.albedo.daemon.Daemon(
+    this.address,
+    grpc.credentials.createInsecure()
+  );
+}
+
+/** Closes the underlying gRPC channel. Called by `Orchestrator.stop()`. */
+close() {
+  this.client?.close();
+}
+```
 
 **Tool execution flow:**
 
@@ -672,7 +703,7 @@ CREATE INDEX IF NOT EXISTS idx_conversations_session ON conversations(session_id
 **Implementation:**
 
 ```typescript
-import Database from "better-sqlite3";
+import { Database } from "bun:sqlite";
 import path from "path";
 
 const DB_PATH = path.resolve(
@@ -681,19 +712,34 @@ const DB_PATH = path.resolve(
 );
 
 export class Memory {
-  private db: Database.Database;
+  private db: Database;
   private sessionId: string;
 
   constructor(sessionId?: string) {
     this.db = new Database(DB_PATH);
-    this.db.pragma("journal_mode = WAL");
-    this.db.pragma("synchronous = NORMAL");
+    this.db.run("PRAGMA journal_mode = WAL");
+    this.db.run("PRAGMA synchronous = NORMAL");
     this.sessionId = sessionId ?? `session_${Date.now()}`;
     this.migrate();
+    this.applyRetentionPolicy();
+  }
+
+  /**
+   * Deletes conversations older than RETENTION_DAYS (default 90) and reclaims
+   * disk space with VACUUM. Without this, the database grows indefinitely —
+   * roughly 50–500 MB after a year of daily use, depending on response length.
+   *
+   * Set the `ALBEDO_MEMORY_RETENTION_DAYS` environment variable to override the
+   * default 90-day window.
+   */
+  private applyRetentionPolicy() {
+    const days = parseInt(process.env.ALBEDO_MEMORY_RETENTION_DAYS ?? "90", 10);
+    this.db.run(`DELETE FROM conversations WHERE created_at < datetime('now', '-${days} days')`);
+    this.db.run("VACUUM");
   }
 
   private migrate() {
-    this.db.exec(`
+    this.db.run(`
       CREATE TABLE IF NOT EXISTS conversations (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         session_id TEXT NOT NULL,
@@ -701,29 +747,30 @@ export class Memory {
         content TEXT NOT NULL,
         timestamp_ms INTEGER NOT NULL,
         token_count INTEGER NOT NULL DEFAULT 0
-      );
+      )
+    `);
+    this.db.run(`
       CREATE INDEX IF NOT EXISTS idx_conversations_session
-        ON conversations(session_id, timestamp_ms);
+        ON conversations(session_id, timestamp_ms)
     `);
   }
 
   saveExchange(userText: string, assistantText: string) {
     const stmt = this.db.prepare(
-      "INSERT INTO conversations (session_id, role, content, timestamp_ms, token_count) VALUES (?, ?, ?, ?, ?)"
+      "INSERT INTO conversations (session_id, role, content, timestamp_ms, token_count) VALUES ($sessionId, $role, $content, $ts, $tokens)"
     );
     const now = Date.now();
-    const insert = this.db.transaction(() => {
-      stmt.run(this.sessionId, "user", userText, now, Math.ceil(userText.length / 4));
-      stmt.run(this.sessionId, "assistant", assistantText, now + 1, Math.ceil(assistantText.length / 4));
-    });
-    insert();
+    this.db.transaction(() => {
+      stmt.run({ $sessionId: this.sessionId, $role: "user", $content: userText, $ts: now, $tokens: Math.ceil(userText.length / 4) });
+      stmt.run({ $sessionId: this.sessionId, $role: "assistant", $content: assistantText, $ts: now + 1, $tokens: Math.ceil(assistantText.length / 4) });
+    })();
   }
 
   getRecentExchanges(limit = 50): { role: string; content: string; timestampMs: number }[] {
-    return this.db.prepare(
-      "SELECT role, content, timestamp_ms as timestampMs FROM conversations WHERE session_id = ? ORDER BY timestamp_ms DESC LIMIT ?"
-    ).all(this.sessionId, limit * 2) // * 2 because each exchange is 2 rows
-     .reverse() as any[];
+    return (this.db.prepare(
+      "SELECT role, content, timestamp_ms as timestampMs FROM conversations WHERE session_id = $sessionId ORDER BY timestamp_ms DESC LIMIT $limit"
+    ).all({ $sessionId: this.sessionId, $limit: limit * 2 }) as any[]) // * 2 because each exchange is 2 rows
+     .reverse();
   }
 
   getSessionId(): string {
@@ -801,6 +848,23 @@ private async drainTtsQueue() {
 }
 ```
 
+**`listTools` cache:** `daemon.listTools()` is an RPC call that returns the full tool schema list. Calling it on every utterance adds unnecessary latency and load on the Go daemon. Cache the result with a 60-second TTL:
+
+```typescript
+private toolsCache: { tools: ToolSchema[]; expiry: number } | null = null;
+
+private async getTools(): Promise<ToolSchema[]> {
+  if (this.toolsCache && Date.now() < this.toolsCache.expiry) {
+    return this.toolsCache.tools;
+  }
+  const tools = await this.daemon.listTools();
+  this.toolsCache = { tools, expiry: Date.now() + 60_000 };
+  return tools;
+}
+```
+
+Replace the direct `daemon.listTools()` call in `processUtterance` with `this.getTools()`. The cache is intentionally not invalidated on tool execution — the tool list changes only when the daemon restarts, which is infrequent. If a new tool must be available immediately, restart the daemon.
+
 **Tool result feedback loop:** When Grok emits a `tool_call` chunk, the orchestrator must execute the tool and feed the result back. Since the Grok API is stateless, this requires a second API call if tool results are needed for continued generation. The flow:
 
 ```typescript
@@ -823,6 +887,36 @@ if (toolCallResults.length > 0) {
 ```
 
 Keep a `toolCallDepth` counter and cap at 3 to prevent runaway tool execution loops.
+
+**`Orchestrator.stop()`:** Called by Phase 6's shutdown sequence to tear down all active resources in a well-defined order. Must be idempotent (safe to call more than once).
+
+```typescript
+async stop(): Promise<void> {
+  // 1. Abort any in-flight Grok API request immediately.
+  this.currentAbortController?.abort();
+  this.currentAbortController = null;
+
+  // 2. Flush and clear the TTS queue so no further synthesis is attempted.
+  this.ttsQueue = [];
+  this.ttsRunning = false;
+
+  // 3. Cancel the awareness stream subscription so the daemon callback stops firing.
+  this.daemon.stopAwarenessStream();
+
+  // 4. Release the microphone — tells the Rust audio engine to stop capture.
+  try {
+    await this.audio.stopCapture();
+  } catch (err) {
+    console.warn("[orchestrator] stopCapture error during shutdown:", err);
+  }
+
+  // 5. Close gRPC client connections to release file handles and OS resources.
+  this.audio.close();
+  this.daemon.close();
+}
+```
+
+The `AudioClient.close()` and `DaemonClient.close()` methods must call `this.client?.close()` on their underlying `grpc.Client` instance. This is safe to call after the server-side process has already exited.
 
 **`processUtterance` must be re-entrant-safe:** If a new transcription arrives while one is being processed (the user interrupts), cancel the in-flight Grok request and TTS queue, then start fresh. Use an `AbortController`:
 
@@ -849,48 +943,94 @@ The goal is to begin TTS synthesis for the first complete sentence before Grok h
 
 **Sentence detection algorithm:**
 
+Use a cursor-based `SentenceDetector` rather than a stateless regex scan. The cursor tracks how far into the accumulated text has already been processed, so only genuinely new text is inspected on each `feed()` call. This avoids the index-confusion bug that arises when the buffer is sliced mid-loop and the regex's `lastIndex` no longer aligns with the new buffer start.
+
 ```typescript
+const FORCE_SPLIT_CHARS = 150; // force-split punctuation-free runs at this length
+
 class SentenceDetector {
-  private buffer = "";
+  private accumulated = "";
+  private cursor = 0; // index into `accumulated` up to which we have already scanned
 
-  // Sentence-ending punctuation followed by whitespace or end of string
-  private readonly SENTENCE_END = /([.!?]+)(\s|$)/;
+  // Matches a sentence-ending punctuation sequence followed by whitespace or EOS.
+  // The `u` flag enables Unicode word boundaries for CJK full-stops (。！？).
+  private readonly SENTENCE_END = /([.!?。！？]+)(\s|$)/gu;
 
-  // Abbreviations to skip (not real sentence endings)
+  // Abbreviations whose trailing period must NOT trigger a sentence split.
   private readonly ABBREVIATIONS = new Set([
     "dr", "mr", "mrs", "ms", "prof", "sr", "jr",
     "vs", "etc", "e.g", "i.e", "approx", "fig",
   ]);
 
+  /**
+   * Appends `text` to the internal buffer and returns any newly completed
+   * sentences. Call `flush()` after the stream ends to retrieve any trailing
+   * incomplete sentence.
+   */
   feed(text: string): string[] {
-    this.buffer += text;
+    this.accumulated += text;
     const sentences: string[] = [];
 
-    let match: RegExpExecArray | null;
-    while ((match = this.SENTENCE_END.exec(this.buffer)) !== null) {
-      const endIdx = match.index + match[1].length;
-      const candidate = this.buffer.slice(0, endIdx).trim();
+    // Only scan the region that is new since last feed().
+    // Reset lastIndex to `cursor` so the regex starts from where we left off.
+    this.SENTENCE_END.lastIndex = this.cursor;
 
-      // Skip if looks like an abbreviation
-      const wordBefore = candidate.split(/\s+/).at(-1)?.replace(/\.$/, "").toLowerCase();
+    let match: RegExpExecArray | null;
+    while ((match = this.SENTENCE_END.exec(this.accumulated)) !== null) {
+      const endIdx = match.index + match[1].length;
+
+      // Check whether the word immediately before the punctuation is an abbreviation.
+      const textBefore = this.accumulated.slice(this.cursor, match.index);
+      const wordBefore = textBefore.trimEnd().split(/\s+/).at(-1)?.replace(/[.!?。！？]+$/, "").toLowerCase();
       if (wordBefore && this.ABBREVIATIONS.has(wordBefore)) {
-        // Skip past this period without extracting
-        this.buffer = this.buffer.slice(endIdx);
+        // Advance cursor past this punctuation without emitting a sentence.
+        this.cursor = endIdx;
+        this.SENTENCE_END.lastIndex = this.cursor;
         continue;
       }
 
+      const candidate = this.accumulated.slice(this.cursor, endIdx).trim();
       if (candidate.length > 0) {
         sentences.push(candidate);
       }
-      this.buffer = this.buffer.slice(endIdx).trimStart();
+      this.cursor = endIdx;
+      // Skip leading whitespace so the next candidate starts cleanly.
+      while (this.cursor < this.accumulated.length && /\s/.test(this.accumulated[this.cursor])) {
+        this.cursor++;
+      }
+      this.SENTENCE_END.lastIndex = this.cursor;
+    }
+
+    // Force-split if the unprocessed tail exceeds FORCE_SPLIT_CHARS with no
+    // sentence-ending punctuation (e.g. a long list item or run-on clause).
+    const tail = this.accumulated.slice(this.cursor);
+    if (tail.length > FORCE_SPLIT_CHARS) {
+      // Split at the last word boundary before the limit.
+      const splitPoint = tail.lastIndexOf(" ", FORCE_SPLIT_CHARS);
+      const forcedChunk = splitPoint > 0 ? tail.slice(0, splitPoint) : tail.slice(0, FORCE_SPLIT_CHARS);
+      if (forcedChunk.trim().length > 0) {
+        sentences.push(forcedChunk.trim());
+      }
+      this.cursor += forcedChunk.length;
+      while (this.cursor < this.accumulated.length && /\s/.test(this.accumulated[this.cursor])) {
+        this.cursor++;
+      }
+      this.SENTENCE_END.lastIndex = this.cursor;
     }
 
     return sentences;
   }
 
+  /**
+   * Called after the Grok stream ends. Returns any text remaining in the buffer
+   * that did not end with terminal punctuation (e.g. the final sentence of a
+   * response that was cut off or simply lacked a period).
+   */
   flush(): string {
-    const remaining = this.buffer.trim();
-    this.buffer = "";
+    const remaining = this.accumulated.slice(this.cursor).trim();
+    this.accumulated = "";
+    this.cursor = 0;
+    this.SENTENCE_END.lastIndex = 0;
     return remaining;
   }
 }
@@ -899,7 +1039,7 @@ class SentenceDetector {
 **Integration in `processUtterance`:** Create a `SentenceDetector` instance per utterance. Feed each `content` chunk into it. When sentences come out, enqueue them for TTS. After the Grok stream ends, call `flush()` — if any remaining text exists (last sentence lacked terminal punctuation), enqueue it too.
 
 **Edge cases:**
-- Very long sentences (>200 chars without punctuation) should be force-split at a word boundary after 150 characters to prevent excessive TTS latency.
+- Very long punctuation-free runs (>150 chars) are force-split at a word boundary by the detector itself — no extra handling needed in the caller.
 - Markdown list items (starting with `-` or `*`) should be stripped of the marker before being sent to TTS.
 - Code fences (` ``` `) should be detected and replaced with a natural-language summary ("here's the code") rather than spoken character by character.
 

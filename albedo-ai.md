@@ -151,12 +151,16 @@ service AudioEngine {
   // Start/stop desktop audio loopback
   rpc StartLoopback(Empty) returns (CaptureStatus);
   rpc StopLoopback(Empty) returns (CaptureStatus);
+
+  // Server-push: completed transcriptions after internal VAD+Whisper
+  rpc WatchTranscriptions(Empty) returns (stream TranscriptionResult);
 }
 
 message AudioChunk {
   bytes pcm_data = 1;       // f32le PCM
   uint32 sample_rate = 2;
   bool is_speech = 3;       // VAD result
+  uint64 timestamp_ms = 4;
 }
 
 message TranscriptionResult {

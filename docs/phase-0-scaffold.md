@@ -219,6 +219,7 @@ mkdir -p daemon/proto
 mkdir -p assets/models
 mkdir -p assets/voices
 mkdir -p assets/whisper
+mkdir -p assets/vad
 mkdir -p bin
 
 # Bun source placeholders (touched here; implemented in later phases)
@@ -281,6 +282,9 @@ service AudioEngine {
   // Streaming: mic audio chunks → transcription results
   rpc StreamSTT(stream AudioChunk) returns (stream TranscriptionResult);
 
+  // Server-push: completed transcriptions after internal VAD+Whisper
+  rpc WatchTranscriptions(Empty) returns (stream TranscriptionResult);
+
   // Single: text → synthesized audio
   rpc Synthesize(SynthesizeRequest) returns (SynthesizeResponse);
 
@@ -297,6 +301,7 @@ message AudioChunk {
   bytes  pcm_data    = 1;   // f32le PCM
   uint32 sample_rate = 2;
   bool   is_speech   = 3;   // VAD result
+  uint64 timestamp_ms = 4;
 }
 
 message TranscriptionResult {
@@ -489,7 +494,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     tonic_build::configure()
         .build_server(true)
         .build_client(false) // Rust only hosts the server; Bun is the client
-        .out_dir("src/generated") // Generated files land in src/generated/
         .compile_protos(
             &[
                 "../proto/audio.proto",
@@ -499,12 +503,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         )?;
     Ok(())
 }
-```
-
-Create the generated output directory (so `cargo check` does not fail before first build):
-
-```bash
-mkdir -p audio-engine/src/generated
 ```
 
 Replace **`audio-engine/src/main.rs`** with the skeleton that imports the generated module:
@@ -783,9 +781,11 @@ Rust codegen is automatic — it runs as part of `cargo build` via `build.rs`. T
 cd audio-engine && cargo build 2>&1 | head -40
 ```
 
-Generated files will appear in `audio-engine/src/generated/` (or in the Cargo `OUT_DIR`, depending on tonic-build configuration). The `tonic::include_proto!` macro in `main.rs` resolves them at compile time via `OUT_DIR`.
+Generated files are written to Cargo's `OUT_DIR` scratch directory. The `tonic::include_proto!` macro in `main.rs` resolves them at compile time via `OUT_DIR` automatically.
 
-> **Correction for build.rs `out_dir`:** The `.out_dir("src/generated")` call in `build.rs` above writes files to a path relative to the crate root. This is convenient for IDE navigation but not idiomatic. The idiomatic approach writes to `$OUT_DIR` (Cargo's scratch directory) and uses `tonic::include_proto!` which reads from `$OUT_DIR` automatically. Update `build.rs` to remove the `.out_dir(...)` call if you prefer the standard approach:
+> **Decision — idiomatic `OUT_DIR` approach:** `build.rs` does not override `.out_dir(...)`. Generated files go to Cargo's `$OUT_DIR` and `tonic::include_proto!("albedo.audio")` resolves them automatically. This is the standard tonic pattern and avoids committing machine-generated code into `src/`.
+>
+> For reference, the idiomatic `build.rs` (which matches what is written above) is:
 >
 > ```rust
 > fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -800,7 +800,7 @@ Generated files will appear in `audio-engine/src/generated/` (or in the Cargo `O
 > }
 > ```
 >
-> With the standard approach, `include_proto!("albedo.audio")` resolves correctly without any extra directory.
+> `include_proto!("albedo.audio")` resolves correctly because Cargo sets `OUT_DIR` and tonic writes there by default.
 
 ---
 
@@ -1012,7 +1012,8 @@ albedo-ai/
 ├── assets/
 │   ├── models/                              [NEW — empty, populated in Phase 4]
 │   ├── voices/                              [NEW — empty, populated in Phase 2]
-│   └── whisper/                             [NEW — empty, populated in Phase 1]
+│   ├── whisper/                             [NEW — empty, populated in Phase 1]
+│   └── vad/                                 [NEW — empty, populated in Phase 1]
 │
 └── bin/                                     [NEW — empty, populated by make build-*]
 ```
@@ -1029,6 +1030,7 @@ albedo-ai/
 | RPC method | Request type | Response type | Streaming |
 |---|---|---|---|
 | `StreamSTT` | `AudioChunk` (stream) | `TranscriptionResult` (stream) | Bidirectional client→server stream |
+| `WatchTranscriptions` | `Empty` | `TranscriptionResult` (stream) | Server-streaming (push after internal VAD+Whisper) |
 | `Synthesize` | `SynthesizeRequest` | `SynthesizeResponse` | Unary |
 | `StartCapture` | `CaptureConfig` | `CaptureStatus` | Unary |
 | `StopCapture` | `Empty` | `CaptureStatus` | Unary |
@@ -1039,7 +1041,7 @@ albedo-ai/
 
 | Message | Key fields |
 |---|---|
-| `AudioChunk` | `pcm_data` (bytes, f32le), `sample_rate` (uint32), `is_speech` (bool) |
+| `AudioChunk` | `pcm_data` (bytes, f32le), `sample_rate` (uint32), `is_speech` (bool), `timestamp_ms` (uint64) |
 | `TranscriptionResult` | `text`, `confidence` (float), `is_final` (bool), `timestamp_ms` (uint64) |
 | `SynthesizeRequest` | `text`, `voice_id`, `speed` (float) |
 | `SynthesizeResponse` | `pcm_data` (bytes), `visemes` (repeated Viseme) |

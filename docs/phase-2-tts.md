@@ -184,15 +184,33 @@ Declare the module in `main.rs` as `mod audio_playback;`. This module owns the `
 
 **Task 3.2 — Implement `PlaybackEngine`**
 
+Use the `rtrb` crate (lock-free SPSC ring buffer) instead of `Arc<Mutex<VecDeque<f32>>>`. The cpal audio callback is real-time code — taking a mutex lock there can cause priority inversion and audible glitches under contention. `rtrb` provides wait-free push/pop with no locking on either side.
+
+Add to `audio-engine/Cargo.toml`:
+```toml
+rtrb = "0.3"
+```
+
 ```rust
 pub struct PlaybackEngine {
     stream: cpal::Stream,
-    sender: Arc<Mutex<VecDeque<f32>>>,
+    producer: rtrb::Producer<f32>,   // async/synthesize side
 }
 
 impl PlaybackEngine {
-    pub fn new() -> Result<Self, Box<dyn std::error::Error>> { todo!() }
-    pub fn enqueue(&self, samples: &[f32]) { todo!() }
+    pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
+        // Size for ~5 seconds of audio at 22 050 Hz
+        let (producer, consumer) = rtrb::RingBuffer::new(22_050 * 5);
+        let stream = build_output_stream(&device, &config, consumer)?;
+        stream.play()?;
+        Ok(Self { stream, producer })
+    }
+    pub fn enqueue(&mut self, samples: &[f32]) {
+        for &s in samples {
+            // If the ring buffer is full, drop the sample rather than block.
+            let _ = self.producer.push(s);
+        }
+    }
     pub fn is_empty(&self) -> bool { todo!() }
 }
 ```
@@ -203,12 +221,32 @@ In `PlaybackEngine::new`:
 
 1. Use `cpal::default_host()` and `host.default_output_device()`.
 2. Query supported configs; prefer `SampleFormat::F32` at 22 050 Hz mono. Fall back to 44 100 Hz stereo if necessary (upmix mono to stereo, upsample with `rubato`).
-3. Build the stream with a data callback that drains from the `VecDeque<f32>` ring buffer. When the buffer is empty, write zeros (silence) to avoid underrun clicks.
+3. Build the stream with a data callback that drains from the `rtrb::Consumer<f32>`. When the buffer is empty, write zeros (silence) to avoid underrun clicks — this is a wait-free pop with no mutex.
 4. Call `stream.play()` immediately — the stream runs continuously in the background.
+
+```rust
+fn build_output_stream(
+    device: &cpal::Device,
+    config: &cpal::StreamConfig,
+    mut consumer: rtrb::Consumer<f32>,
+) -> Result<cpal::Stream, cpal::BuildStreamError> {
+    device.build_output_stream(
+        config,
+        move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
+            for sample in data.iter_mut() {
+                // consumer.pop() is wait-free — safe in a real-time callback.
+                *sample = consumer.pop().unwrap_or(0.0);
+            }
+        },
+        |err| eprintln!("[playback] stream error: {}", err),
+        None,
+    )
+}
+```
 
 **Task 3.4 — Implement `enqueue`**
 
-Lock the `VecDeque`, extend it with the incoming samples. This is called from the `synthesize` path after ONNX inference completes. Because synthesis is CPU-bound and happens before enqueue, the audio is available in full before playback begins — no streaming decode is needed for Phase 2.
+Push samples into the `rtrb::Producer` from the async synthesize path. This is called after ONNX inference completes. Because synthesis is CPU-bound and happens before enqueue, the audio is available in full before playback begins — no streaming decode is needed for Phase 2.
 
 **Task 3.5 — Wire `PlaybackEngine` into `AlbedoAudioEngine`**
 
@@ -259,8 +297,9 @@ ort = { version = "2.0", features = ["load-dynamic"] }
 rubato = "0.16"
 hound = "3.5"
 cpal = "0.15"
-# optional for phonemization
-espeak-phonemizer = "0.1"   # or bundled phoneme table
+rtrb = "0.3"                  # lock-free SPSC ring buffer for audio playback
+# phonemization — espeak-ng is preferred; cmudict fallback is bundled
+espeak-phonemizer = "0.1"     # optional; requires espeak-ng system library
 ```
 
 ---
@@ -366,18 +405,20 @@ phonemes: Vec<String>  +  total audio duration (ms)
 
 ```rust
 pub struct PlaybackEngine {
-    _stream: cpal::Stream,                   // must stay alive
-    buffer: Arc<Mutex<VecDeque<f32>>>,       // shared with stream callback
-    sample_rate: u32,                        // configured output rate
+    _stream: cpal::Stream,              // must stay alive
+    producer: rtrb::Producer<f32>,     // lock-free producer; synthesize side pushes here
+    sample_rate: u32,                   // configured output rate
 }
 ```
+
+`rtrb` provides a lock-free SPSC ring buffer. The `rtrb::Consumer<f32>` is moved into the cpal data callback (real-time thread); the `rtrb::Producer<f32>` stays on the async synthesize side. No mutex is needed and no priority inversion is possible.
 
 **Key functions:**
 
 | Function | Signature | Purpose |
 |---|---|---|
 | `new` | `() -> Result<Self>` | Init cpal host, device, stream |
-| `enqueue` | `(&self, samples: &[f32])` | Push samples into ring buffer |
+| `enqueue` | `(&mut self, samples: &[f32])` | Push samples into ring buffer via producer |
 | `is_empty` | `(&self) -> bool` | Check if playback queue is drained |
 | `drain` | `(&self)` | Block until buffer is empty (for tests) |
 
@@ -386,10 +427,10 @@ pub struct PlaybackEngine {
 ```
 resampled_samples: Vec<f32>
   └─ enqueue()
-       └─ VecDeque<f32> (ring buffer, Mutex-protected)
-            └─ cpal data callback (runs on audio thread, ~every 10 ms)
-                 └─ fill output_buffer from VecDeque
-                      └─ zeros if VecDeque is empty (silence padding)
+       └─ rtrb::Producer<f32> (lock-free push, async context)
+            └─ rtrb::Consumer<f32> (lock-free pop, cpal audio thread, ~every 10 ms)
+                 └─ fill output_buffer from consumer
+                      └─ 0.0 on underrun (silence padding, no mutex needed)
 ```
 
 ---
@@ -399,23 +440,18 @@ resampled_samples: Vec<f32>
 ### Model loading via `ort`
 
 ```rust
-use ort::{Environment, Session, SessionBuilder, Value};
+use ort::{Session, Value};
 
 fn load_session(model_path: &str) -> Result<Session, ort::Error> {
-    let environment = Environment::builder()
-        .with_name("albedo-tts")
-        .with_log_level(ort::LoggingLevel::Warning)
-        .build()?
-        .into_arc();
-
-    SessionBuilder::new(&environment)?
+    // ort v2 removed the global Environment API. Call Session::builder() directly.
+    ort::Session::builder()?
         .with_optimization_level(ort::GraphOptimizationLevel::Level3)?
         .with_intra_threads(2)?
         .commit_from_file(model_path)
 }
 ```
 
-The `ort` v2 API wraps the C API of ONNX Runtime. `load-dynamic` feature flag is required so that the `.so`/`.dll` is loaded at runtime rather than linked at compile time — this simplifies distribution.
+The `ort` v2 API removed the global `Environment` construct that existed in v1. Sessions are now created directly via `Session::builder()` without constructing or storing an `Environment` first. The `load-dynamic` feature flag is required so that the `.so`/`.dll` is loaded at runtime rather than linked at compile time — this simplifies distribution.
 
 ### Inference pipeline
 
@@ -471,16 +507,28 @@ Resampling from 24 000 → 22 050 Hz uses `rubato::FftFixedInOut`:
 ```rust
 use rubato::{FftFixedInOut, Resampler};
 
+// The chunk size must be a fixed constant — FftFixedInOut requires every call to
+// process() to receive exactly this many input samples. Do NOT pass the total
+// sample count or a variable length here.
+const RESAMPLE_CHUNK: usize = 1024;
+
 fn resample_24k_to_22k(samples: Vec<f32>) -> Result<Vec<f32>, rubato::ResampleError> {
     let mut resampler = FftFixedInOut::<f32>::new(
-        24_000,   // in_rate
-        22_050,   // out_rate
-        samples.len().min(2048),
-        1,        // channels
+        24_000,        // in_rate
+        22_050,        // out_rate
+        RESAMPLE_CHUNK,
+        1,             // channels
     )?;
-    let waves_in = vec![samples];
-    let waves_out = resampler.process(&waves_in, None)?;
-    Ok(waves_out.into_iter().next().unwrap())
+
+    // Process the input in fixed-size chunks, padding the last one if needed.
+    let mut output = Vec::new();
+    for chunk in samples.chunks(RESAMPLE_CHUNK) {
+        let mut padded = chunk.to_vec();
+        padded.resize(RESAMPLE_CHUNK, 0.0); // pad last chunk with silence
+        let resampled = resampler.process(&[&padded], None)?;
+        output.extend_from_slice(&resampled[0]);
+    }
+    Ok(output)
 }
 ```
 
@@ -553,14 +601,14 @@ The stream is initialized once at engine startup and runs continuously. It does 
 fn build_output_stream(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
-    buffer: Arc<Mutex<VecDeque<f32>>>,
+    mut consumer: rtrb::Consumer<f32>,
 ) -> Result<cpal::Stream, cpal::BuildStreamError> {
     device.build_output_stream(
         config,
         move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-            let mut buf = buffer.lock().unwrap();
+            // consumer.pop() is wait-free — no mutex, safe in a real-time callback.
             for sample in data.iter_mut() {
-                *sample = buf.pop_front().unwrap_or(0.0);
+                *sample = consumer.pop().unwrap_or(0.0);
             }
         },
         |err| eprintln!("[playback] stream error: {}", err),
@@ -571,15 +619,17 @@ fn build_output_stream(
 
 ### Buffering strategy
 
-The ring buffer (`VecDeque<f32>`) holds pre-computed samples. Because Phase 2 synthesizes a complete sentence before playback begins (no streaming decode), the buffer is filled in one shot before any audio is consumed by the cpal callback. This eliminates buffer underruns during normal operation.
+The ring buffer (`rtrb::RingBuffer<f32>`) holds pre-computed samples. Because Phase 2 synthesizes a complete sentence before playback begins (no streaming decode), the buffer is filled in one shot before any audio is consumed by the cpal callback. This eliminates buffer underruns during normal operation.
+
+`rtrb` uses a lock-free SPSC (single-producer, single-consumer) design. The producer lives on the async synthesize side; the consumer lives inside the cpal data callback. Neither side ever blocks or takes a lock, making this safe for real-time audio.
 
 Sizing guidelines:
 
 - Minimum buffer capacity: 1 second of audio = 22 050 samples.
 - Typical sentence audio: 2–5 seconds = 44 100–110 250 samples.
-- `VecDeque` grows dynamically; no fixed capacity is needed.
+- `rtrb::RingBuffer` has a fixed capacity set at construction time. Use `22_050 * 5` (5 seconds) as a safe default.
 
-If the same `PlaybackEngine` is enqueued while already playing (e.g., the orchestrator sends two sentences in rapid succession), samples are simply appended to the tail of the deque. The stream callback consumes them in FIFO order, producing seamless back-to-back speech.
+If the same `PlaybackEngine` is enqueued while already playing (e.g., the orchestrator sends two sentences in rapid succession), samples are pushed into the ring buffer and consumed in FIFO order, producing seamless back-to-back speech. If the buffer is full, excess samples are silently dropped — the synthesize side must not block.
 
 ### Synchronization with viseme timing
 
@@ -659,18 +709,25 @@ async fn synthesize(
 
     let speed = if req.speed <= 0.0 { 1.0 } else { req.speed };
 
-    let (pcm_data, visemes) = self
+    // synthesize_internal returns f32 samples + phoneme events directly.
+    // No round-trip through i16 is needed for playback.
+    let (f32_samples, phoneme_events) = self
         .kokoro
-        .synthesize(&req.text, &voice_id, speed)
+        .synthesize_internal(&req.text, &voice_id, speed)
         .await
         .map_err(|e| {
             eprintln!("[tts] synthesize error: {}", e);
             Status::internal(e.to_string())
         })?;
 
-    // Enqueue for immediate playback (non-blocking)
-    let samples = tts::pcm16_to_f32(&pcm_data);
-    self.playback.enqueue(&samples);
+    let visemes = lipsync::extract_visemes(&phoneme_events);
+
+    // f32 → i16 conversion only for the gRPC wire format.
+    let pcm_data = tts::f32_to_pcm16(&f32_samples);
+
+    // Enqueue original f32 samples for immediate playback (non-blocking).
+    // No pcm16_to_f32 round-trip needed.
+    self.playback.enqueue(&f32_samples);
 
     Ok(Response::new(SynthesizeResponse { pcm_data, visemes }))
 }
@@ -747,17 +804,17 @@ async fn test_synthesize_and_play() {
         "assets/voices/kokoro-v0_19.onnx",
         "assets/voices/voices.bin",
     ).unwrap();
-    let playback = PlaybackEngine::new().unwrap();
+    let mut playback = PlaybackEngine::new().unwrap();
 
-    let (pcm_bytes, _) = engine
-        .synthesize("Testing audio playback.", "af_bella", 1.0)
+    // Use synthesize_internal to get f32 samples directly — no i16 round-trip.
+    let (f32_samples, _phoneme_events) = engine
+        .synthesize_internal("Testing audio playback.", "af_bella", 1.0)
         .await
         .unwrap();
 
-    let samples = tts::pcm16_to_f32(&pcm_bytes);
-    let duration_ms = (samples.len() as f32 / 22_050.0 * 1000.0) as u64;
+    let duration_ms = (f32_samples.len() as f32 / 22_050.0 * 1000.0) as u64;
 
-    playback.enqueue(&samples);
+    playback.enqueue(&f32_samples);
 
     // Wait for playback to complete
     tokio::time::sleep(Duration::from_millis(duration_ms + 500)).await;
@@ -962,14 +1019,35 @@ This leaves the overall first-audio latency at approximately 780 ms end-to-end a
 
 ### Risk 3 — Phonemization quality
 
-**Risk:** The text → phoneme step is the primary source of TTS quality issues. English has many irregular pronunciations (proper nouns, abbreviations, numbers). Poor phonemization leads to robotic or incorrect speech, which directly degrades user experience.
+**Risk:** The text → phoneme step is the primary source of TTS quality issues. English has many irregular pronunciations (proper nouns, abbreviations, numbers). Poor phonemization leads to robotic or incorrect speech, which directly degrades user experience. In addition, `espeak-phonemizer` depends on `espeak-ng` being installed as a system library, which is not available by default on all platforms.
 
 **Mitigation:**
-- Use `espeak-ng` as the phonemization backend via the `espeak-phonemizer` Rust crate. `espeak-ng` handles English irregularities, number expansion, and abbreviations.
-- As a fallback (if `espeak-ng` is not installed), bundle a static pronunciation dictionary for the 10 000 most common English words (CMU Pronouncing Dictionary subset, ~200 KB).
+
+Make the phonemizer pluggable behind a trait so the two implementations are interchangeable:
+
+```rust
+/// Implemented by both espeak and cmudict backends.
+trait Phonemizer: Send + Sync {
+    fn phonemize(&self, text: &str) -> Vec<PhonemeEvent>;
+}
+```
+
+Provide two concrete implementations:
+
+- **`EspeakPhonemizer`** (preferred): calls `espeak-ng` via the `espeak-phonemizer` Rust crate. Handles English irregularities, number expansion, and abbreviations. Used when `espeak-ng` is installed on the system.
+- **`CmudictPhonemizer`** (fallback): pure-Rust lookup against a bundled static CMU Pronouncing Dictionary (cmudict) subset for the ~125 000 most common English words (~400 KB as a `phf::Map` compiled into the binary). Requires no system library. Returns ARPAbet pronunciations mapped to IPA for the Kokoro vocabulary. Unknown words fall back to a simple letter-name spelling.
+
+At startup, `KokoroEngine::new` attempts to construct `EspeakPhonemizer`; if it returns an error (library not found), it falls back to `CmudictPhonemizer` and logs a warning:
+
+```
+[tts] espeak-ng not found — falling back to bundled CMU dict phonemizer
+```
+
+Store the selected backend as `Box<dyn Phonemizer>` in `KokoroEngine`.
+
 - Add a pre-processing step that expands common patterns before phonemization: numbers → words, `$` → "dollars", `%` → "percent", URLs → "link", etc.
 
-**Affected files:** `audio-engine/src/tts.rs`, `audio-engine/Cargo.toml`
+**Affected files:** `audio-engine/src/tts.rs`, `audio-engine/src/phonemizer.rs` (new), `audio-engine/Cargo.toml`
 
 ---
 
