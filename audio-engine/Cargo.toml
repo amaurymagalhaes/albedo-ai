@@ -3,14 +3,26 @@ name    = "albedo-audio"
 version = "0.1.0"
 edition = "2021"
 
+[[example]]
+name = "generate_fixture"
+path = "examples/generate_fixture.rs"
+
 [dependencies]
-tonic  = "0.13"
-prost  = "0.13"
-tokio  = { version = "1", features = ["full"] }
+tonic       = "0.13"
+prost       = "0.13"
+tokio       = { version = "1", features = ["full"] }
 tokio-stream = "0.1"
-cpal = "0.15"
-rubato = "0.16"
-hound  = "3.5"
+cpal        = "0.15"
+whisper-rs  = "0.14"
+ort         = { version = "2.0.0-rc.12", features = ["load-dynamic"] }
+ndarray     = "0.17"
+rubato      = "0.16"
+hound       = "3.5"
+tracing     = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow      = "1"
+tower = "0.5.3"
+hyper-util = "0.1.20"
 
 [build-dependencies]
 tonic-build = "0.13"
