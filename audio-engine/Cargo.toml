@@ -3,6 +3,10 @@ name    = "albedo-audio"
 version = "0.1.0"
 edition = "2021"
 
+[[example]]
+name = "generate_fixture"
+path = "examples/generate_fixture.rs"
+
 [dependencies]
 tonic       = "0.13"
 prost       = "0.13"
