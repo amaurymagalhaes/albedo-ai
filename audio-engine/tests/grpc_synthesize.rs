@@ -4,7 +4,6 @@ use tokio::sync::Mutex;
 use tonic::transport::Server;
 use tonic::Request;
 use tokio_stream::wrappers::TcpListenerStream;
-use tokio_stream::StreamExt;
 
 use albedo_audio::{audio_playback, stt, tts, vad, AlbedoAudioEngine, audio_proto};
 use audio_proto::audio_engine_client::AudioEngineClient;
@@ -92,92 +91,66 @@ async fn start_test_server() -> u16 {
 
 #[tokio::test]
 #[ignore]
-async fn test_start_stop_capture() {
+async fn test_grpc_synthesize_roundtrip() {
     let port = start_test_server().await;
     let mut client = AudioEngineClient::connect(format!("http://127.0.0.1:{}", port))
         .await
         .unwrap();
 
-    let status = client
-        .start_capture(Request::new(CaptureConfig {
-            device_id: String::new(),
-            sample_rate: 16000,
-            vad_threshold: 0.5,
-        }))
-        .await
-        .unwrap()
-        .into_inner();
-
-    assert!(status.active, "Expected active after StartCapture");
-    assert!(!status.device_name.is_empty(), "Expected non-empty device name");
-
-    let status = client
-        .stop_capture(Request::new(Empty {}))
-        .await
-        .unwrap()
-        .into_inner();
-    assert!(!status.active, "Expected inactive after StopCapture");
-}
-
-#[tokio::test]
-#[ignore]
-async fn test_double_start_capture_fails() {
-    let port = start_test_server().await;
-    let mut client = AudioEngineClient::connect(format!("http://127.0.0.1:{}", port))
-        .await
-        .unwrap();
-
-    let config = CaptureConfig {
-        device_id: String::new(),
-        sample_rate: 16000,
-        vad_threshold: 0.5,
-    };
-
-    let _ = client.start_capture(Request::new(config.clone())).await.unwrap();
-    let second = client.start_capture(Request::new(config)).await;
-    assert!(second.is_err(), "Expected error for double StartCapture");
-
-    let _ = client.stop_capture(Request::new(Empty {})).await.unwrap();
-}
-
-#[tokio::test]
-#[ignore]
-async fn test_stream_stt_with_silence() {
-    let port = start_test_server().await;
-    let mut client = AudioEngineClient::connect(format!("http://127.0.0.1:{}", port))
-        .await
-        .unwrap();
-
-    let silence: Vec<f32> = vec![0.0f32; 512];
-    let pcm_bytes: Vec<u8> = silence.iter().flat_map(|s| s.to_le_bytes()).collect();
-
-    let chunks: Vec<AudioChunk> = (0..100)
-        .map(|i| AudioChunk {
-            pcm_data: pcm_bytes.clone(),
-            sample_rate: 16000,
-            is_speech: false,
-            timestamp_ms: i as u64 * 32,
+    let response = client
+        .synthesize(SynthesizeRequest {
+            text: "Phase two test.".to_string(),
+            voice_id: "af_bella".to_string(),
+            speed: 1.0,
         })
-        .collect();
+        .await
+        .unwrap()
+        .into_inner();
 
-    let stream = tokio_stream::iter(chunks);
-    let response = client.stream_stt(stream).await.unwrap();
-    let mut response_stream = response.into_inner();
+    assert!(!response.pcm_data.is_empty(), "PCM data should not be empty");
+    assert!(!response.visemes.is_empty(), "Should have visemes");
+    assert_eq!(response.pcm_data.len() % 2, 0, "PCM must be even-length (16-bit samples)");
+}
 
-    let mut results = Vec::new();
-    let _ = tokio::time::timeout(Duration::from_secs(5), async {
-        while let Some(result) = response_stream.next().await {
-            results.push(result);
-        }
-    })
-    .await;
+#[tokio::test]
+#[ignore]
+async fn test_grpc_synthesize_empty_text() {
+    let port = start_test_server().await;
+    let mut client = AudioEngineClient::connect(format!("http://127.0.0.1:{}", port))
+        .await
+        .unwrap();
 
-    let clean = results.iter().all(|r| match r {
-        Ok(r) => r.text.trim().is_empty() || r.text.trim().len() < 3,
-        Err(_) => false,
-    });
-    assert!(
-        clean,
-        "Silence should not produce valid transcriptions (hallucination filter)"
-    );
+    let response = client
+        .synthesize(SynthesizeRequest {
+            text: "".to_string(),
+            voice_id: "af_bella".to_string(),
+            speed: 1.0,
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert!(response.pcm_data.is_empty(), "Empty text should return empty PCM");
+    assert!(response.visemes.is_empty(), "Empty text should return no visemes");
+}
+
+#[tokio::test]
+#[ignore]
+async fn test_grpc_synthesize_default_voice() {
+    let port = start_test_server().await;
+    let mut client = AudioEngineClient::connect(format!("http://127.0.0.1:{}", port))
+        .await
+        .unwrap();
+
+    let response = client
+        .synthesize(SynthesizeRequest {
+            text: "Testing default voice.".to_string(),
+            voice_id: "".to_string(),
+            speed: 0.0,
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert!(!response.pcm_data.is_empty(), "Should work with default voice");
 }
