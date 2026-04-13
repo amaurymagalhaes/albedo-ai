@@ -5,8 +5,7 @@ use ort::value::Tensor;
 
 pub struct VadEngine {
     session: Session,
-    h: Array3<f32>,
-    c: Array3<f32>,
+    state: Array3<f32>,
     sample_rate: i64,
     pub threshold: f32,
 }
@@ -29,13 +28,11 @@ impl VadEngine {
             .commit_from_file(model_path)
             .map_err(|e| anyhow::anyhow!("Failed to load Silero VAD model: {:?}", e))?;
 
-        let h = Array3::zeros((1, 1, 64));
-        let c = Array3::zeros((1, 1, 64));
+        let state = ndarray::Array3::zeros((2, 1, 128));
 
         Ok(Self {
             session,
-            h,
-            c,
+            state,
             sample_rate: 16000,
             threshold,
         })
@@ -49,23 +46,21 @@ impl VadEngine {
 
         let input_array = ndarray::Array2::from_shape_vec((1, chunk_size), padded)?;
         let sr_array = ndarray::array![self.sample_rate];
+        let state_array = self.state.clone();
 
         let input_tensor = Tensor::from_array(input_array)
             .map_err(|e| anyhow::anyhow!("Failed to create input tensor: {:?}", e))?;
         let sr_tensor = Tensor::from_array(sr_array)
             .map_err(|e| anyhow::anyhow!("Failed to create sr tensor: {:?}", e))?;
-        let h_tensor = Tensor::from_array(self.h.clone())
-            .map_err(|e| anyhow::anyhow!("Failed to create h tensor: {:?}", e))?;
-        let c_tensor = Tensor::from_array(self.c.clone())
-            .map_err(|e| anyhow::anyhow!("Failed to create c tensor: {:?}", e))?;
+        let state_tensor = Tensor::from_array(state_array)
+            .map_err(|e| anyhow::anyhow!("Failed to create state tensor: {:?}", e))?;
 
         let outputs = self
             .session
             .run(ort::inputs![
                 "input" => input_tensor,
                 "sr" => sr_tensor,
-                "h" => h_tensor,
-                "c" => c_tensor
+                "state" => state_tensor
             ])
             .map_err(|e| anyhow::anyhow!("VAD inference failed: {:?}", e))?;
 
@@ -74,24 +69,17 @@ impl VadEngine {
             .map_err(|e| anyhow::anyhow!("Failed to extract VAD output: {:?}", e))?;
         let speech_prob = output_data.first().copied().unwrap_or(0.0);
 
-        let (_, hn_data) = outputs["hn"]
+        let (_, state_data) = outputs["stateN"]
             .try_extract_tensor::<f32>()
-            .map_err(|e| anyhow::anyhow!("Failed to extract hidden state: {:?}", e))?;
-        self.h = ndarray::Array3::from_shape_vec((1, 1, 64), hn_data.to_vec())
-            .map_err(|e| anyhow::anyhow!("Unexpected hn shape: {:?}", e))?;
-
-        let (_, cn_data) = outputs["cn"]
-            .try_extract_tensor::<f32>()
-            .map_err(|e| anyhow::anyhow!("Failed to extract cell state: {:?}", e))?;
-        self.c = ndarray::Array3::from_shape_vec((1, 1, 64), cn_data.to_vec())
-            .map_err(|e| anyhow::anyhow!("Unexpected cn shape: {:?}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to extract state: {:?}", e))?;
+        self.state = ndarray::Array3::from_shape_vec((2, 1, 128), state_data.to_vec())
+            .map_err(|e| anyhow::anyhow!("Unexpected state shape: {:?}", e))?;
 
         Ok(speech_prob > self.threshold)
     }
 
     pub fn reset(&mut self) {
-        self.h = Array3::zeros((1, 1, 64));
-        self.c = Array3::zeros((1, 1, 64));
+        self.state = ndarray::Array3::zeros((2, 1, 128));
     }
 }
 
@@ -124,7 +112,6 @@ mod tests {
             let _ = vad.is_speech(&vec![0.0f32; 512]);
         }
         vad.reset();
-        assert!(vad.h.iter().all(|&x| x == 0.0));
-        assert!(vad.c.iter().all(|&x| x == 0.0));
+        assert!(vad.state.iter().all(|&x| x == 0.0));
     }
 }
