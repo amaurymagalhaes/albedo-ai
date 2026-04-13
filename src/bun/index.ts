@@ -53,11 +53,11 @@ const audioClient = new AudioClient(config.audioSocketPath);
 const daemonClient = new DaemonClient(config.daemonSocketPath);
 
 const grok = new GrokClient({
-  apiKey: config.xaiApiKey,
-  model: config.grokModel,
-  baseUrl: config.grokBaseUrl,
-  maxTokens: config.grokMaxTokens,
-  temperature: config.grokTemperature,
+  apiKey: config.openrouterApiKey,
+  model: config.llmModel,
+  baseUrl: config.llmBaseUrl,
+  maxTokens: config.llmMaxTokens,
+  temperature: config.llmTemperature,
 });
 
 const orchestrator = new Orchestrator({

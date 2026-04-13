@@ -198,7 +198,7 @@ export class Orchestrator extends EventEmitter {
         let userMessage = "Sorry, I ran into an issue. Let me try again.";
 
         if (status === 401) {
-          userMessage = "Sorry, there's an authentication issue with the AI service. Please check your API key.";
+          userMessage = "Sorry, there's an authentication issue with the AI service. Please check your OpenRouter API key.";
         } else if (status === 429) {
           userMessage = "Sorry, the AI service is rate-limited. Please wait a moment and try again.";
         } else if (status >= 500) {

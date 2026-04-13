@@ -178,6 +178,8 @@ export class GrokClient {
       headers: {
         Authorization: `Bearer ${this.config.apiKey}`,
         "Content-Type": "application/json",
+        "HTTP-Referer": "https://albedo-ai.dev",
+        "X-Title": "Albedo AI",
       },
       body: JSON.stringify(body),
       signal,
@@ -186,17 +188,17 @@ export class GrokClient {
     if (response.status === 429 || response.status >= 500) {
       if (attempt < MAX_ATTEMPTS - 1) {
         console.warn(
-          `[grok] HTTP ${response.status}, retrying (attempt ${attempt + 1})...`
+          `[llm] HTTP ${response.status}, retrying (attempt ${attempt + 1})...`
         );
         return this.fetchWithRetry(path, body, attempt + 1, signal);
       }
       const text = await response.text();
-      throw new Error(`Grok API error ${response.status}: ${text}`);
+      throw new Error(`LLM API error ${response.status}: ${text}`);
     }
 
     if (!response.ok) {
       const text = await response.text();
-      throw new Error(`Grok API error ${response.status}: ${text}`);
+      throw new Error(`LLM API error ${response.status}: ${text}`);
     }
 
     return response;

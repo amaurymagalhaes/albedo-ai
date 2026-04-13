@@ -225,7 +225,7 @@ Under 1 second from user speech to Albedo's first spoken word.
 - [Rust](https://rustup.rs/) >= 1.75
 - [Go](https://go.dev/) >= 1.22
 - [Protobuf compiler](https://grpc.io/docs/protoc-installation/) (`protoc`)
-- xAI API key (for Grok)
+- OpenRouter API key (for LLM access)
 
 ### Model Files
 
@@ -234,7 +234,7 @@ Download and place in `assets/`:
 | Model | Path | Source |
 |---|---|---|
 | Whisper base | `assets/whisper/ggml-base.bin` | [ggerganov/whisper.cpp](https://github.com/ggerganov/whisper.cpp/tree/master/models) |
-| Kokoro TTS | `assets/voices/default.onnx` | [Kokoro](https://github.com/thewh1teagle/kokoro-onnx) |
+| Model Files | `assets/voices/default.onnx` | [Kokoro](https://github.com/thewh1teagle/kokoro-onnx) |
 | Live2D model | `assets/models/` | Any .moc3 compatible model |
 
 ---
@@ -258,7 +258,7 @@ make build-bun
 
 ```bash
 # Set your API key
-export XAI_API_KEY="your-key-here"
+export OPENROUTER_API_KEY="your-key-here"
 
 # Development mode (builds native binaries + starts Electrobun dev server)
 make dev
@@ -268,20 +268,27 @@ make dev
 
 ## Configuration
 
-Set your xAI API key as an environment variable:
+Set your OpenRouter API key as an environment variable:
 
 ```bash
-export XAI_API_KEY="xai-..."
+export OPENROUTER_API_KEY="sk-or-..."
 ```
 
-The orchestrator connects to Grok with these defaults:
+The orchestrator connects via OpenRouter with these defaults:
 
 | Setting | Value |
 |---|---|
-| Model | `grok-4.1-fast-reasoning` |
-| API base | `https://api.x.ai/v1` |
+| Model | `x-ai/grok-4.1-fast` |
+| API base | `https://openrouter.ai/api/v1` |
 | Max tokens | 4096 |
 | Temperature | 0.7 |
+
+You can use any OpenRouter-supported model by setting the `ALBEDO_MODEL` env var:
+
+```bash
+export ALBEDO_MODEL="google/gemini-2.5-flash"
+export ALBEDO_MODEL="anthropic/claude-sonnet-4"
+```
 
 ---
 
@@ -300,7 +307,7 @@ The Go daemon enforces a security sandbox on all tool execution:
 
 | Item | Monthly Cost |
 |---|---|
-| Grok 4.1 Fast API | ~$14 |
+| Grok 4.1 Fast (via OpenRouter) | ~$14 |
 | Rust + Go binaries | Free |
 | Whisper.cpp model | Free |
 | Kokoro TTS model | Free |

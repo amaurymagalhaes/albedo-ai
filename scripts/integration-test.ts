@@ -56,9 +56,9 @@ async function testDaemon() {
 async function testGrok() {
   console.log("── Grok API ──");
   const g = new GrokClient({
-    apiKey: config.xaiApiKey,
-    model: config.grokModel,
-    baseUrl: config.grokBaseUrl,
+    apiKey: config.openrouterApiKey,
+    model: config.llmModel,
+    baseUrl: config.llmBaseUrl,
     maxTokens: 64,
     temperature: 0,
   });

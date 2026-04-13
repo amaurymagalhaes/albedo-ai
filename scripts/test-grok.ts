@@ -1,15 +1,15 @@
 import { GrokClient } from "../src/bun/grok-client";
 
-const apiKey = process.env.XAI_API_KEY;
+const apiKey = process.env.OPENROUTER_API_KEY;
 if (!apiKey) {
-  console.error("Set XAI_API_KEY environment variable");
+  console.error("Set OPENROUTER_API_KEY environment variable");
   process.exit(1);
 }
 
 const grok = new GrokClient({
   apiKey,
-  model: process.env.GROK_MODEL ?? "grok-4-fast",
-  baseUrl: "https://api.x.ai/v1",
+  model: process.env.ALBEDO_MODEL ?? "x-ai/grok-4.1-fast",
+  baseUrl: "https://openrouter.ai/api/v1",
   maxTokens: 512,
   temperature: 0.7,
 });

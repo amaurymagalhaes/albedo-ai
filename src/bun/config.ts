@@ -3,11 +3,11 @@ import { homedir } from "os";
 import { join } from "path";
 
 export interface AlbedoConfig {
-  xaiApiKey: string;
-  grokModel: string;
-  grokBaseUrl: string;
-  grokMaxTokens: number;
-  grokTemperature: number;
+  openrouterApiKey: string;
+  llmModel: string;
+  llmBaseUrl: string;
+  llmMaxTokens: number;
+  llmTemperature: number;
   audioSocketPath: string;
   daemonSocketPath: string;
   audioBinPath: string;
@@ -33,7 +33,7 @@ const keyMap: Record<string, keyof AlbedoConfig> = {
   "vad-threshold": "vadThreshold",
   "sample-rate": "sampleRate",
   "voice-id": "defaultVoiceId",
-  "model": "grokModel",
+  "model": "llmModel",
   "model-path": "whisperModelPath",
 };
 
@@ -60,12 +60,12 @@ function isWindows(): boolean {
 }
 
 function buildConfig(): AlbedoConfig {
-  const envXaiApiKey = process.env.XAI_API_KEY;
+  const envApiKey = process.env.OPENROUTER_API_KEY;
   const jsonConfig = loadJsonConfig();
 
-  if (!envXaiApiKey && !jsonConfig.xaiApiKey) {
+  if (!envApiKey && !jsonConfig.openrouterApiKey) {
     throw new Error(
-      "XAI_API_KEY is required but was not provided. Set the XAI_API_KEY environment variable or add \"xaiApiKey\" to ~/.config/albedo-ai/config.json"
+      "OPENROUTER_API_KEY is required but was not provided. Set the OPENROUTER_API_KEY environment variable or add \"openrouterApiKey\" to ~/.config/albedo-ai/config.json"
     );
   }
 
@@ -78,11 +78,11 @@ function buildConfig(): AlbedoConfig {
     : "unix:///tmp/albedo-daemon.sock";
 
   return {
-    xaiApiKey: envXaiApiKey ?? jsonConfig.xaiApiKey!,
-    grokModel: process.env.ALBEDO_MODEL ?? jsonConfig.grokModel ?? "grok-4-fast",
-    grokBaseUrl: jsonConfig.grokBaseUrl ?? "https://api.x.ai/v1",
-    grokMaxTokens: jsonConfig.grokMaxTokens ?? 4096,
-    grokTemperature: jsonConfig.grokTemperature ?? 0.7,
+    openrouterApiKey: envApiKey ?? jsonConfig.openrouterApiKey!,
+    llmModel: process.env.ALBEDO_MODEL ?? jsonConfig.llmModel ?? "x-ai/grok-4.1-fast",
+    llmBaseUrl: jsonConfig.llmBaseUrl ?? "https://openrouter.ai/api/v1",
+    llmMaxTokens: jsonConfig.llmMaxTokens ?? 4096,
+    llmTemperature: jsonConfig.llmTemperature ?? 0.7,
     audioSocketPath: jsonConfig.audioSocketPath ?? defaultAudioSocket,
     daemonSocketPath: jsonConfig.daemonSocketPath ?? defaultDaemonSocket,
     audioBinPath: jsonConfig.audioBinPath ?? "bin/albedo-audio",
