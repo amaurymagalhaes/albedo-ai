@@ -34,7 +34,6 @@ const keyMap: Record<string, keyof AlbedoConfig> = {
   "sample-rate": "sampleRate",
   "voice-id": "defaultVoiceId",
   "model": "llmModel",
-  "model-path": "whisperModelPath",
 };
 
 const reverseKeyMap: Record<string, string> = {};
