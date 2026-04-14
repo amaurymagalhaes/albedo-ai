@@ -40,9 +40,7 @@ const win = new BrowserWindow({
   title: "Albedo AI",
   url: "views://mainview/index.html",
   frame: { width: 420, height: 650, x: 0, y: 0 },
-  transparent: true,
   titleBarStyle: "hidden",
-  passthrough: true,
   rpc,
 } as any);
 
@@ -103,9 +101,9 @@ async function boot() {
 
 let tray: any = null;
 try {
-  const ElectrobunBun = require("electrobun/bun");
+  const ElectrobunBun = await import("electrobun/bun");
   const Tray = ElectrobunBun.Tray;
-  tray = new Tray({
+  tray = new (Tray as any)({
     icon: "assets/icons/tray-idle.png",
     tooltip: "Albedo AI",
     menu: [

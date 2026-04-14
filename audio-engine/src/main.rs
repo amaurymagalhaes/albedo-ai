@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, broadcast};
 use tonic::transport::Server;
 use albedo_audio::{AlbedoAudioEngine, audio_playback, audio_proto, stt, tts, vad};
 use audio_proto::audio_engine_server::AudioEngineServer;
@@ -37,6 +37,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         capture_tx: Arc::new(Mutex::new(None)),
         capture_handle: Arc::new(Mutex::new(None)),
         capture_rx: Arc::new(Mutex::new(None)),
+        transcription_tx: broadcast::channel(64).0,
     };
 
     #[cfg(unix)]

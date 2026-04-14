@@ -1,7 +1,9 @@
 import * as grpc from "@grpc/grpc-js";
 import * as protoLoader from "@grpc/proto-loader";
 import path from "path";
+import { existsSync } from "fs";
 import { EventEmitter } from "events";
+import { config } from "../config";
 
 export interface AwarenessSnapshot {
   activeWindow: {
@@ -63,9 +65,8 @@ export class DaemonClient extends EventEmitter {
   async connect(): Promise<void> {
     this.client?.close();
 
-    const packageDef = protoLoader.loadSync(
-      path.resolve(import.meta.dir, "../../../proto/daemon.proto"),
-      {
+    const protoPath = this.resolveProto("daemon.proto");
+    const packageDef = protoLoader.loadSync(protoPath, {
         keepCase: true,
         longs: String,
         enums: String,
@@ -88,6 +89,18 @@ export class DaemonClient extends EventEmitter {
     this.connected = true;
     this.reconnectAttempts = 0;
     console.log("[daemon-client] connected to", this.socketPath);
+  }
+
+  private resolveProto(filename: string): string {
+    const candidates = [
+      path.resolve(import.meta.dir, "../../../proto", filename),
+      path.resolve(import.meta.dir, "../proto", filename),
+      path.resolve(config.projectRoot, "proto", filename),
+    ];
+    for (const p of candidates) {
+      if (existsSync(p)) return p;
+    }
+    throw new Error(`Cannot find ${filename} — checked: ${candidates.join(", ")}`);
   }
 
   async disconnect(): Promise<void> {

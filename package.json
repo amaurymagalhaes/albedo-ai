@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "electrobun dev",
     "build": "electrobun build",
-    "start": "electrobun start"
+    "start": "electrobun start",
+    "setup": "bash scripts/setup-and-run.sh"
   },
   "dependencies": {
     "electrobun": "1.17.3-beta.11",

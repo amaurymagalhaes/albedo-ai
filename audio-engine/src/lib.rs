@@ -12,7 +12,7 @@ pub mod audio_proto {
 }
 
 use std::sync::Arc;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{mpsc, Mutex, broadcast};
 use tonic::{Request, Response, Status};
 use tokio_stream::wrappers::ReceiverStream;
 use audio_proto::audio_engine_server::AudioEngine;
@@ -32,6 +32,7 @@ pub struct AlbedoAudioEngine {
     pub capture_tx: Arc<Mutex<Option<mpsc::Sender<Vec<f32>>>>>,
     pub capture_handle: Arc<Mutex<Option<audio_capture::CaptureHandle>>>,
     pub capture_rx: Arc<Mutex<Option<mpsc::Receiver<Vec<f32>>>>>,
+    pub transcription_tx: broadcast::Sender<TranscriptionResult>,
 }
 
 #[tonic::async_trait]
@@ -190,7 +191,18 @@ impl AudioEngine for AlbedoAudioEngine {
         &self,
         _request: Request<Empty>,
     ) -> Result<Response<Self::WatchTranscriptionsStream>, Status> {
-        Err(Status::unimplemented("WatchTranscriptions is not yet implemented"))
+        let mut rx = self.transcription_tx.subscribe();
+        let (tx, out_rx) = mpsc::channel::<Result<TranscriptionResult, Status>>(32);
+
+        tokio::spawn(async move {
+            while let Ok(result) = rx.recv().await {
+                if tx.send(Ok(result)).await.is_err() {
+                    break;
+                }
+            }
+        });
+
+        Ok(Response::new(ReceiverStream::new(out_rx)))
     }
 
     async fn start_capture(
@@ -230,10 +242,119 @@ impl AudioEngine for AlbedoAudioEngine {
             .map_err(|e| Status::internal(e.to_string()))?;
 
         let device_name = handle.device_name.clone();
+        let capture_rx = audio_rx;
 
         *self.capture_handle.lock().await = Some(handle);
         *self.capture_tx.lock().await = Some(audio_tx_clone);
-        *self.capture_rx.lock().await = Some(audio_rx);
+        *self.capture_rx.lock().await = None;
+
+        let whisper = self.whisper.clone();
+        let vad = self.vad.clone();
+        let bcast = self.transcription_tx.clone();
+
+        tokio::spawn(async move {
+            let mut rx = capture_rx;
+
+            let mut speech_buffer: Vec<f32> = Vec::new();
+            let mut silence_count: u32 = 0;
+            let mut speech_count: u32 = 0;
+            let mut state = VadState::Silence;
+
+            const SPEECH_ONSET: u32 = 3;
+            const SILENCE_END: u32 = 8;
+            const MAX_BUFFER_SAMPLES: usize = 30 * 16000;
+
+            while let Some(samples) = rx.recv().await {
+                if samples.is_empty() {
+                    continue;
+                }
+
+                let is_speech = {
+                    let mut v = vad.lock().await;
+                    v.is_speech(&samples).unwrap_or(false)
+                };
+
+                match state {
+                    VadState::Silence => {
+                        if is_speech {
+                            speech_count += 1;
+                            speech_buffer.extend_from_slice(&samples);
+                            if speech_count >= SPEECH_ONSET {
+                                state = VadState::Speech;
+                            }
+                        } else {
+                            speech_count = 0;
+                            speech_buffer.clear();
+                        }
+                    }
+                    VadState::Speech => {
+                        speech_buffer.extend_from_slice(&samples);
+                        if !is_speech {
+                            silence_count = 1;
+                            state = VadState::PostSpeech;
+                        } else if speech_buffer.len() >= MAX_BUFFER_SAMPLES {
+                            let buf = std::mem::take(&mut speech_buffer);
+                            let w2 = whisper.clone();
+                            let bcast2 = bcast.clone();
+                            tokio::spawn(async move {
+                                match w2.transcribe_async(buf).await {
+                                    Ok(text) => {
+                                        let trimmed = text.trim().to_string();
+                                        if !trimmed.is_empty() {
+                                            let result = TranscriptionResult {
+                                                text: trimmed,
+                                                confidence: 0.9,
+                                                is_final: true,
+                                                timestamp_ms: 0,
+                                            };
+                                            let _ = bcast2.send(result);
+                                        }
+                                    }
+                                    Err(_) => {}
+                                }
+                            });
+                            state = VadState::Silence;
+                            silence_count = 0;
+                            speech_count = 0;
+                        }
+                    }
+                    VadState::PostSpeech => {
+                        if is_speech {
+                            speech_buffer.extend_from_slice(&samples);
+                            silence_count = 0;
+                            state = VadState::Speech;
+                        } else {
+                            silence_count += 1;
+                            if silence_count >= SILENCE_END {
+                                let buf = std::mem::take(&mut speech_buffer);
+                                let w2 = whisper.clone();
+                                let bcast2 = bcast.clone();
+                                tokio::spawn(async move {
+                                    match w2.transcribe_async(buf).await {
+                                        Ok(text) => {
+                                            let trimmed = text.trim().to_string();
+                                            if !trimmed.is_empty() {
+                                                let result = TranscriptionResult {
+                                                    text: trimmed,
+                                                    confidence: 0.9,
+                                                    is_final: true,
+                                                    timestamp_ms: 0,
+                                                };
+                                                let _ = bcast2.send(result);
+                                            }
+                                        }
+                                        Err(_) => {}
+                                    }
+                                });
+                                state = VadState::Silence;
+                                silence_count = 0;
+                                speech_count = 0;
+                            }
+                        }
+                    }
+                }
+            }
+        });
 
         Ok(Response::new(CaptureStatus {
             active: true,

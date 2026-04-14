@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "fs";
 import { homedir } from "os";
-import { join } from "path";
+import { join, resolve } from "path";
 
 export interface AlbedoConfig {
   openrouterApiKey: string;
@@ -44,6 +44,44 @@ for (const [alias, field] of Object.entries(keyMap)) {
   }
 }
 
+function findProjectRoot(): string {
+  let dir = import.meta.dir;
+  for (let i = 0; i < 10; i++) {
+    if (existsSync(join(dir, "package.json"))) return dir;
+    const parent = join(dir, "..");
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return process.cwd();
+}
+
+const PROJECT_ROOT = findProjectRoot();
+
+function loadDotEnv(): void {
+  const candidates = [
+    join(PROJECT_ROOT, ".env"),
+    join(process.cwd(), ".env"),
+  ];
+  for (const envPath of candidates) {
+    if (!existsSync(envPath)) continue;
+    try {
+      const text = readFileSync(envPath, "utf-8");
+      for (const line of text.split("\n")) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith("#")) continue;
+        const eqIdx = trimmed.indexOf("=");
+        if (eqIdx === -1) continue;
+        const key = trimmed.slice(0, eqIdx).trim();
+        const val = trimmed.slice(eqIdx + 1).trim().replace(/^["']|["']$/g, "");
+        if (!(key in process.env)) {
+          process.env[key] = val;
+        }
+      }
+      return;
+    } catch {}
+  }
+}
+
 function loadJsonConfig(): Partial<AlbedoConfig> {
   const configPath = join(homedir(), ".config", "albedo-ai", "config.json");
   if (!existsSync(configPath)) return {};
@@ -60,6 +98,7 @@ function isWindows(): boolean {
 }
 
 function buildConfig(): AlbedoConfig {
+  loadDotEnv();
   const envApiKey = process.env.OPENROUTER_API_KEY;
   const jsonConfig = loadJsonConfig();
 
@@ -85,10 +124,10 @@ function buildConfig(): AlbedoConfig {
     llmTemperature: jsonConfig.llmTemperature ?? 0.7,
     audioSocketPath: jsonConfig.audioSocketPath ?? defaultAudioSocket,
     daemonSocketPath: jsonConfig.daemonSocketPath ?? defaultDaemonSocket,
-    audioBinPath: jsonConfig.audioBinPath ?? "bin/albedo-audio",
-    daemonBinPath: jsonConfig.daemonBinPath ?? "bin/albedo-daemon",
-    whisperModelPath: jsonConfig.whisperModelPath ?? "assets/whisper/ggml-base.bin",
-    voiceModelPath: jsonConfig.voiceModelPath ?? "assets/voices/kokoro-v1_0.onnx",
+    audioBinPath: resolve(PROJECT_ROOT, jsonConfig.audioBinPath ?? "bin/albedo-audio"),
+    daemonBinPath: resolve(PROJECT_ROOT, jsonConfig.daemonBinPath ?? "bin/albedo-daemon"),
+    whisperModelPath: resolve(PROJECT_ROOT, jsonConfig.whisperModelPath ?? "assets/whisper/ggml-base.bin"),
+    voiceModelPath: resolve(PROJECT_ROOT, jsonConfig.voiceModelPath ?? "assets/voices/kokoro-v1_0.onnx"),
     vadThreshold: process.env.ALBEDO_VAD_THRESHOLD
       ? Number(process.env.ALBEDO_VAD_THRESHOLD)
       : jsonConfig.vadThreshold ?? 0.5,
@@ -102,7 +141,7 @@ function buildConfig(): AlbedoConfig {
     socketReadyTimeoutMs: jsonConfig.socketReadyTimeoutMs ?? 10000,
     processRestartDelayMs: jsonConfig.processRestartDelayMs ?? 1000,
     maxProcessRestarts: jsonConfig.maxProcessRestarts ?? 5,
-    projectRoot: jsonConfig.projectRoot ?? process.cwd(),
+    projectRoot: jsonConfig.projectRoot ?? PROJECT_ROOT,
   };
 }
 

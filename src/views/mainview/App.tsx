@@ -71,7 +71,7 @@ export default function App() {
     <div className="app-root">
       <Avatar
         ref={avatarRef}
-        modelPath="views://mainview/../../assets/models/albedo/albedo.model3.json"
+        modelPath="views://mainview/../../assets/models/albedo/fuxuan.model3.json"
         expression={expression}
       />
       {showSubtitles && subtitle && (
@@ -123,15 +123,6 @@ export default function App() {
             <div className="fatal-error-message">{fatalError.message}</div>
             {fatalError.detail && <div className="fatal-error-detail">{fatalError.detail}</div>}
           </div>
-        </div>
-      )}
-      {Object.keys(processStatuses).length > 0 && (
-        <div className="process-status-bar">
-          {Object.entries(processStatuses).map(([name, info]) => (
-            <span key={name} className={`process-status process-${info.status}`}>
-              {name}: {info.status}
-            </span>
-          ))}
         </div>
       )}
     </div>

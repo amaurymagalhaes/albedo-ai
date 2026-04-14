@@ -5,11 +5,20 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Albedo AI</title>
   <style>
-    html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; }
+    html, body { margin: 0; padding: 0; background: rgba(18, 18, 24, 0.95); overflow: hidden; }
   </style>
 </head>
 <body>
   <div id="root"></div>
-  <script type="module" src="./main.tsx"></script>
+  <script>
+    window.onerror = function(msg, url, line, col, err) {
+      document.getElementById('root').innerHTML = '<pre style="color:#ff6b6b;padding:20px;font-size:11px;white-space:pre-wrap;">' + (err ? err.stack : msg) + '</pre>';
+      return true;
+    };
+    window.addEventListener('unhandledrejection', function(e) {
+      document.getElementById('root').innerHTML = '<pre style="color:#ff6b6b;padding:20px;font-size:11px;white-space:pre-wrap;">PROMISE: ' + (e.reason ? (e.reason.stack || e.reason) : e) + '</pre>';
+    });
+  </script>
+  <script src="./main.js"></script>
 </body>
 </html>

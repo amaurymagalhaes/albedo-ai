@@ -9,10 +9,12 @@ GO_PROTO_OUT  = daemon/proto
 TS_PROTO_OUT  = src/bun/rpc/generated
 
 PROTO_GEN_TS  = node_modules/.bin/protoc-gen-ts
+PROTO_GEN_GO  = $(HOME)/go/bin/protoc-gen-go
+PROTO_GEN_GO_GRPC = $(HOME)/go/bin/protoc-gen-go-grpc
 
 # ─── Default: build everything ──────────────────────────────────────────────
 
-all: proto build-rust build-go build-bun
+all: proto build-rust build-go bun-run-build
 
 # ─── Protobuf codegen ────────────────────────────────────────────────────────
 
@@ -20,6 +22,8 @@ proto: $(GO_PROTO_OUT) $(TS_PROTO_OUT)
 	@echo "==> Generating Go protobuf code..."
 	protoc \
 		--proto_path=$(PROTO_DIR) \
+		--plugin=protoc-gen-go=$(PROTO_GEN_GO) \
+		--plugin=protoc-gen-go-grpc=$(PROTO_GEN_GO_GRPC) \
 		--go_out=$(GO_PROTO_OUT) \
 		--go_opt=paths=source_relative \
 		--go-grpc_out=$(GO_PROTO_OUT) \
@@ -69,12 +73,22 @@ build-bun:
 
 # ─── Dev mode ────────────────────────────────────────────────────────────────
 
-dev: build-rust build-go
-	@echo "==> Starting native processes..."
-	$(BIN_DIR)/albedo-audio &
-	$(BIN_DIR)/albedo-daemon &
+dev:
+	@echo "==> Stopping existing processes..."
+	-pkill -f "bin/albedo-audio" 2>/dev/null || true
+	-pkill -f "bin/albedo-daemon" 2>/dev/null || true
+	sleep 0.5
+	rm -f /tmp/albedo-audio.sock /tmp/albedo-daemon.sock
+	@echo "==> Building..."
+	$(MAKE) build-rust build-go bun-run-build
 	@echo "==> Starting Electrobun dev server..."
-	bun run dev
+	bun run dev; EXIT=$$?; \
+	kill $$(pgrep -f "albedo-audio") $$(pgrep -f "albedo-daemon") 2>/dev/null; \
+	rm -f /tmp/albedo-audio.sock /tmp/albedo-daemon.sock; \
+	exit $$EXIT
+
+bun-run-build:
+	bun run build
 
 # ─── Clean ───────────────────────────────────────────────────────────────────
 

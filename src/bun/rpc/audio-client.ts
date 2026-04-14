@@ -1,7 +1,9 @@
 import * as grpc from "@grpc/grpc-js";
 import * as protoLoader from "@grpc/proto-loader";
 import path from "path";
+import { existsSync } from "fs";
 import { EventEmitter } from "events";
+import { config } from "../config";
 
 export interface TranscriptionEvent {
   text: string;
@@ -38,9 +40,8 @@ export class AudioClient extends EventEmitter {
   async connect(): Promise<void> {
     this.client?.close();
 
-    const packageDef = protoLoader.loadSync(
-      path.resolve(import.meta.dir, "../../../proto/audio.proto"),
-      {
+    const protoPath = this.resolveProto("audio.proto");
+    const packageDef = protoLoader.loadSync(protoPath, {
         keepCase: true,
         longs: String,
         enums: String,
@@ -67,6 +68,18 @@ export class AudioClient extends EventEmitter {
     if (this.transcriptionCb) {
       this.registerTranscriptionStream(this.transcriptionCb);
     }
+  }
+
+  private resolveProto(filename: string): string {
+    const candidates = [
+      path.resolve(import.meta.dir, "../../../proto", filename),
+      path.resolve(import.meta.dir, "../proto", filename),
+      path.resolve(config.projectRoot, "proto", filename),
+    ];
+    for (const p of candidates) {
+      if (existsSync(p)) return p;
+    }
+    throw new Error(`Cannot find ${filename} — checked: ${candidates.join(", ")}`);
   }
 
   async disconnect(): Promise<void> {
@@ -225,9 +238,12 @@ export class AudioClient extends EventEmitter {
         timestampMs: Number(result.timestamp_ms),
       });
     });
-    call.on("error", (err: Error) => {
+    call.on("error", (err: any) => {
       console.warn("[audio-client] transcription stream error:", err.message);
-      this.emit("error", err);
+      if (err.code === 12) {
+        console.warn("[audio-client] WatchTranscriptions not available — transcription will not work until the audio engine is updated");
+        return;
+      }
       if (this.isUnavailableError(err)) {
         this.scheduleReconnect();
       }
