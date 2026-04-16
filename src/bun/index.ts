@@ -36,15 +36,31 @@ const rpc = BrowserView.defineRPC<AlbedoRPCSchema>({
   },
 });
 
+const WIN_W = 420;
+const WIN_H = 650;
+
 const win = new BrowserWindow({
   title: "Albedo AI",
   url: "views://mainview/index.html",
-  frame: { width: 420, height: 650, x: 0, y: 0 },
+  frame: { width: WIN_W, height: WIN_H, x: 0, y: 0 },
   titleBarStyle: "hidden",
+  transparent: true,
+  renderer: "cef",
   rpc,
 } as any);
 
 win.setAlwaysOnTop(true);
+
+try {
+  const proc = Bun.spawnSync(["xrandr", "--current"]);
+  const output = proc.stdout?.toString() ?? "";
+  const match = output.match(/current\s+(\d+)\s+x\s+(\d+)/);
+  if (match) {
+    const screenW = parseInt(match[1]);
+    const screenH = parseInt(match[2]);
+    win.setPosition(screenW - WIN_W, screenH - WIN_H);
+  }
+} catch {}
 
 const pm = new ProcessManager(config);
 const audioClient = new AudioClient(config.audioSocketPath);
