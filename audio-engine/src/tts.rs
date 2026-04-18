@@ -4,7 +4,7 @@ use anyhow::{bail, Context, Result};
 use ndarray::{Array1, Array2};
 use ort::session::{builder::GraphOptimizationLevel, Session};
 use ort::value::Tensor;
-use rubato::{FftFixedInOut, Resampler};
+
 use std::collections::HashMap;
 
 pub struct KokoroConfig {
@@ -246,16 +246,19 @@ impl KokoroEngine {
         };
 
         let audio = self.run_inference(&tokens, &style, speed)?;
-        let resampled = resample_24k_to_22k(audio)?;
 
         let phoneme_strings: Vec<String> = ipa
             .chars()
             .filter(|c| c.is_alphabetic() || !c.is_ascii())
             .map(|c| c.to_string())
             .collect();
-        let phoneme_events = self.build_phoneme_events(&phoneme_strings, resampled.len());
+        let phoneme_events = self.build_phoneme_events(&phoneme_strings, audio.len());
 
-        Ok((resampled, phoneme_events))
+        Ok((audio, phoneme_events))
+    }
+
+    pub fn tts_sample_rate(&self) -> u32 {
+        24000
     }
 
     pub fn synthesize(
@@ -312,7 +315,7 @@ impl KokoroEngine {
             return Vec::new();
         }
 
-        let total_ms = ((total_samples as f64 / 22050.0) * 1000.0) as u32;
+        let total_ms = ((total_samples as f64 / 24000.0) * 1000.0) as u32;
         let silence_duration_ms: u32 = 60;
 
         let silence_count = phonemes.iter().filter(|p| p.as_str() == "_").count() as u32;
@@ -415,37 +418,4 @@ pub fn f32_to_pcm16(samples: &[f32]) -> Vec<u8> {
         bytes.extend_from_slice(&pcm.to_le_bytes());
     }
     bytes
-}
-
-fn resample_24k_to_22k(samples: Vec<f32>) -> Result<Vec<f32>> {
-    let mut resampler = FftFixedInOut::<f32>::new(24000, 22050, 1024, 1)
-        .map_err(|e| anyhow::anyhow!("Failed to create resampler: {:?}", e))?;
-
-    let chunk_size = resampler.input_frames_next();
-    let mut output = Vec::new();
-    let mut pos = 0;
-
-    while pos < samples.len() {
-        let remaining = samples.len() - pos;
-        let take = chunk_size.min(remaining);
-        let mut chunk = vec![0.0f32; chunk_size];
-        chunk[..take].copy_from_slice(&samples[pos..pos + take]);
-
-        let input_channels = vec![chunk];
-        let result = resampler
-            .process(&input_channels, None)
-            .map_err(|e| anyhow::anyhow!("Resample error: {:?}", e))?;
-
-        if let Some(channel_data) = result.first() {
-            output.extend_from_slice(channel_data);
-        }
-
-        pos += take;
-    }
-
-    let ratio = 22050.0 / 24000.0;
-    let expected_len = (samples.len() as f64 * ratio).round() as usize;
-    output.truncate(expected_len);
-
-    Ok(output)
 }

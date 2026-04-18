@@ -8,17 +8,18 @@ use audio_proto::audio_engine_server::AudioEngineServer;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
 
-    let whisper_path = std::env::var("WHISPER_MODEL")
-        .unwrap_or_else(|_| "assets/whisper/ggml-base.bin".to_string());
+    let stt_backend = std::env::var("STT_BACKEND")
+        .unwrap_or_else(|_| "whisper".to_string());
+    tracing::info!("STT backend: {}", stt_backend);
+
+    let stt = stt::create_backend(&stt_backend)?;
+
     let vad_path = std::env::var("VAD_MODEL")
         .unwrap_or_else(|_| "assets/vad/silero_vad.onnx".to_string());
     let kokoro_path = std::env::var("KOKORO_MODEL")
         .unwrap_or_else(|_| "assets/voices/kokoro-v1_0.onnx".to_string());
     let voices_path = std::env::var("VOICES_BIN")
         .unwrap_or_else(|_| "assets/voices/voices.bin".to_string());
-
-    tracing::info!("Loading Whisper model from: {}", whisper_path);
-    let whisper = stt::WhisperEngine::new(&whisper_path)?;
 
     tracing::info!("Loading VAD model from: {}", vad_path);
     let vad_engine = vad::VadEngine::new(&vad_path, 0.5)?;
@@ -30,7 +31,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let playback = audio_playback::PlaybackEngine::new()?;
 
     let engine = AlbedoAudioEngine {
-        whisper,
+        stt,
         vad: Arc::new(Mutex::new(vad_engine)),
         kokoro: Arc::new(kokoro),
         playback: Arc::new(Mutex::new(playback)),
@@ -38,6 +39,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         capture_handle: Arc::new(Mutex::new(None)),
         capture_rx: Arc::new(Mutex::new(None)),
         transcription_tx: broadcast::channel(64).0,
+        level_tx: broadcast::channel(64).0,
+        ptt_buffer: Arc::new(Mutex::new(Vec::new())),
+        ptt_recording: Arc::new(Mutex::new(false)),
     };
 
     #[cfg(unix)]

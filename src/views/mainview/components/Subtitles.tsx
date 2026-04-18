@@ -45,12 +45,10 @@ export default function Subtitles({ text, isSpeaking, speakerLabel }: SubtitlesP
     return clearTimers;
   }, [text, isSpeaking, clearTimers]);
 
-  if (!visible && !fading) return null;
+  if (!visible) return null;
 
   return (
-    <div
-      className={`subtitle-container ${visible && !fading ? "visible" : ""} ${fading ? "fading" : ""}`}
-    >
+    <div className="subtitle-container visible">
       {speakerLabel && (
         <span className="subtitle-speaker">{speakerLabel}</span>
       )}

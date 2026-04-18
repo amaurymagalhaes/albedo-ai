@@ -1,0 +1,131 @@
+.settings-root {
+  padding: 20px 24px;
+  color: rgba(255, 255, 255, 0.8);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-size: 13px;
+  user-select: none;
+}
+
+.settings-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #fff;
+  margin-bottom: 24px;
+}
+
+.settings-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 18px;
+  color: rgba(255, 255, 255, 0.8);
+  font-size: 13px;
+}
+
+.settings-row label {
+  flex: 1;
+}
+
+.settings-row input[type="range"] {
+  width: 120px;
+}
+
+.settings-toggle {
+  position: relative;
+  width: 40px;
+  height: 22px;
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 11px;
+  cursor: pointer;
+  border: none;
+}
+
+.settings-toggle.active {
+  background: rgba(130, 180, 255, 0.6);
+}
+
+.settings-toggle::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  background: #fff;
+  border-radius: 50%;
+}
+
+.settings-toggle.active::after {
+  left: 20px;
+}
+
+.custom-select {
+  position: relative;
+  width: 160px;
+}
+
+.custom-select-trigger {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 6px;
+  color: #fff;
+  padding: 6px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.custom-select-trigger:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.custom-select-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.custom-select-arrow {
+  font-size: 8px;
+  margin-left: 6px;
+  opacity: 0.6;
+}
+
+.custom-select-options {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  left: 0;
+  z-index: 200;
+  background: rgba(20, 20, 35, 0.98);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 6px;
+  margin-top: 4px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.custom-select-option {
+  padding: 8px 10px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.8);
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.custom-select-option:hover {
+  background: rgba(130, 180, 255, 0.2);
+  color: #fff;
+}
+
+.custom-select-option.selected {
+  background: rgba(130, 180, 255, 0.3);
+  color: #fff;
+}

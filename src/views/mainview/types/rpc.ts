@@ -1,1 +1,1 @@
-export type { VisemeShape, Viseme, ExpressionName, MainToViewEvents, ViewToMainEvents } from "../../../shared/rpc-types";
+export type { VisemeShape, Viseme, ExpressionName, AvatarFormat, AvatarModelInfo, MainToViewEvents, ViewToMainEvents } from "../../../shared/rpc-types";

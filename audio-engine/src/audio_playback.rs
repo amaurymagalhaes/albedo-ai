@@ -1,12 +1,17 @@
 use anyhow::{bail, Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use rtrb::RingBuffer;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
+const TTS_SAMPLE_RATE: u32 = 24000;
 
 pub struct PlaybackEngine {
     _stream: cpal::Stream,
     producer: rtrb::Producer<f32>,
     sample_rate: u32,
     capacity: usize,
+    clear_flag: Arc<AtomicBool>,
 }
 
 unsafe impl Send for PlaybackEngine {}
@@ -19,18 +24,19 @@ impl PlaybackEngine {
             Some(d) => d,
             None => {
                 tracing::warn!("[playback] No output device available, using null playback");
-                let capacity: usize = 22_050 * 5;
+                let capacity: usize = (TTS_SAMPLE_RATE as usize) * 60;
                 let (producer, _consumer) = RingBuffer::new(capacity);
                 return Ok(Self {
                     _stream: null_stream()?,
                     producer,
-                    sample_rate: 22050,
+                    sample_rate: TTS_SAMPLE_RATE,
                     capacity,
+                    clear_flag: Arc::new(AtomicBool::new(false)),
                 });
             }
         };
 
-        let mut supported: Vec<_> = device
+        let supported: Vec<_> = device
             .supported_output_configs()
             .context("failed to query output configs")?
             .filter(|c| c.sample_format() == cpal::SampleFormat::F32)
@@ -40,45 +46,46 @@ impl PlaybackEngine {
             anyhow::bail!("no f32 output configs available");
         }
 
-        let preference = |c: &cpal::SupportedStreamConfigRange| {
-            let rate = c.min_sample_rate().0;
-            let ch = c.channels();
-            let mono = ch == 1;
-            let rate22050 = rate <= 22050 && c.max_sample_rate().0 >= 22050;
-            let rate44100 = rate <= 44100 && c.max_sample_rate().0 >= 44100;
-            match (
-                rate22050 && mono,
-                rate44100 && mono,
-                rate44100 && ch == 2,
-                true,
-            ) {
-                (true, _, _, _) => 0,
-                (_, true, _, _) => 1,
-                (_, _, true, _) => 2,
-                _ => 3,
-            }
-        };
+        let chosen = supported
+            .iter()
+            .find(|c| {
+                c.min_sample_rate().0 <= TTS_SAMPLE_RATE && c.max_sample_rate().0 >= TTS_SAMPLE_RATE
+            })
+            .unwrap_or(&supported[0]);
 
-        supported.sort_by_key(preference);
-
-        let chosen = &supported[0];
-        let target_rate = if preference(chosen) <= 1 && chosen.max_sample_rate().0 >= 22050 {
-            22050u32
+        let sample_rate = if chosen.min_sample_rate().0 <= TTS_SAMPLE_RATE
+            && chosen.max_sample_rate().0 >= TTS_SAMPLE_RATE
+        {
+            TTS_SAMPLE_RATE
         } else {
-            44100u32.clamp(chosen.min_sample_rate().0, chosen.max_sample_rate().0)
+            tracing::warn!(
+                "[playback] device doesn't support {} Hz, using native rate",
+                TTS_SAMPLE_RATE
+            );
+            chosen
+                .max_sample_rate()
+                .0
+                .clamp(chosen.min_sample_rate().0, chosen.max_sample_rate().0)
         };
 
-        let sample_rate = target_rate;
         let stream_config = chosen
             .with_sample_rate(cpal::SampleRate(sample_rate))
             .config();
         let channels = stream_config.channels;
 
-        let capacity: usize = 22_050 * 5;
+        let capacity: usize = (sample_rate as usize) * 60;
         let (producer, consumer) = RingBuffer::new(capacity);
+        let clear_flag = Arc::new(AtomicBool::new(false));
+        let clear_flag_clone = clear_flag.clone();
 
-        let stream = build_output_stream(&device, &stream_config, consumer, channels)
-            .context("failed to build output stream")?;
+        let stream = build_output_stream(
+            &device,
+            &stream_config,
+            consumer,
+            channels,
+            clear_flag_clone,
+        )
+        .context("failed to build output stream")?;
         stream.play().context("failed to start playback stream")?;
 
         tracing::info!("[playback] started: {} Hz, {} ch", sample_rate, channels);
@@ -88,13 +95,30 @@ impl PlaybackEngine {
             producer,
             sample_rate,
             capacity,
+            clear_flag,
         })
     }
 
     pub fn enqueue(&mut self, samples: &[f32]) {
-        for &s in samples {
-            let _ = self.producer.push(s);
+        if samples.is_empty() {
+            return;
         }
+        self.clear_flag.store(false, Ordering::SeqCst);
+        if self.sample_rate == TTS_SAMPLE_RATE {
+            for &s in samples {
+                let _ = self.producer.push(s);
+            }
+        } else {
+            let resampled =
+                simple_resample(samples, TTS_SAMPLE_RATE as usize, self.sample_rate as usize);
+            for &s in &resampled {
+                let _ = self.producer.push(s);
+            }
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.clear_flag.store(true, Ordering::SeqCst);
     }
 
     pub fn is_empty(&self) -> bool {
@@ -106,15 +130,35 @@ impl PlaybackEngine {
     }
 }
 
+fn simple_resample(samples: &[f32], from_rate: usize, to_rate: usize) -> Vec<f32> {
+    let ratio = to_rate as f64 / from_rate as f64;
+    let out_len = ((samples.len() as f64) * ratio) as usize;
+    let mut out = Vec::with_capacity(out_len);
+    for i in 0..out_len {
+        let src_pos = (i as f64) / ratio;
+        let idx = src_pos as usize;
+        let frac = src_pos - idx as f64;
+        let s0 = samples[idx];
+        let s1 = samples.get(idx + 1).copied().unwrap_or(s0);
+        out.push(s0 + (s1 - s0) * frac as f32);
+    }
+    out
+}
+
 fn build_output_stream(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
     mut consumer: rtrb::Consumer<f32>,
     channels: u16,
+    clear_flag: Arc<AtomicBool>,
 ) -> Result<cpal::Stream, cpal::BuildStreamError> {
     device.build_output_stream::<f32, _, _>(
         config,
         move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
+            if clear_flag.load(Ordering::SeqCst) {
+                while consumer.pop().is_ok() {}
+                clear_flag.store(false, Ordering::SeqCst);
+            }
             if channels == 1 {
                 for sample in data.iter_mut() {
                     *sample = consumer.pop().unwrap_or(0.0);
@@ -146,7 +190,7 @@ fn null_stream() -> Result<cpal::Stream> {
         bail!("no output configs for null stream");
     }
     let config = configs[0]
-        .with_sample_rate(cpal::SampleRate(44100))
+        .with_sample_rate(cpal::SampleRate(TTS_SAMPLE_RATE))
         .config();
     let (_producer, mut consumer) = rtrb::RingBuffer::<f32>::new(64);
     let channels = config.channels;

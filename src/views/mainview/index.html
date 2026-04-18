@@ -4,8 +4,9 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Albedo AI</title>
+  <link rel="stylesheet" href="./main.css" />
   <style>
-    html, body { margin: 0; padding: 0; background: rgba(18, 18, 24, 0.95); overflow: hidden; }
+    html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; }
   </style>
 </head>
 <body>
@@ -17,6 +18,39 @@
     };
     window.addEventListener('unhandledrejection', function(e) {
       document.getElementById('root').innerHTML = '<pre style="color:#ff6b6b;padding:20px;font-size:11px;white-space:pre-wrap;">PROMISE: ' + (e.reason ? (e.reason.stack || e.reason) : e) + '</pre>';
+    });
+  </script>
+  <script src="./live2dcubismcore.min.js"></script>
+  <script>
+    // Debug: log all mouse events to verify CEF OSR forwarding
+    window.__dragLog = [];
+    document.addEventListener('mousemove', function(e) {
+      window.__dragLog.push('mousemove:' + e.clientX + ',' + e.clientY);
+      if (window.__dragLog.length > 100) window.__dragLog.shift();
+    });
+    document.addEventListener('wheel', function(e) {
+      window.__dragLog.push('wheel:' + e.deltaY);
+    });
+    document.addEventListener('mousedown', function(e) {
+      window.__dragLog.push('mousedown:' + e.clientX + ',' + e.clientY);
+    });
+    document.addEventListener('mouseup', function(e) {
+      window.__dragLog.push('mouseup:' + e.clientX + ',' + e.clientY);
+    });
+  </script>
+  <script>
+    window.__cubismReady = new Promise(function(resolve) {
+      if (window.Live2DCubismCore && window.Live2DCubismCore.Version) {
+        resolve();
+      } else {
+        var _origInit = window.Live2DCubismCore && window.Live2DCubismCore.onRuntimeInitialized;
+        var checkInterval = setInterval(function() {
+          if (window.Live2DCubismCore && window.Live2DCubismCore.Version) {
+            clearInterval(checkInterval);
+            resolve();
+          }
+        }, 50);
+      }
     });
   </script>
   <script src="./main.js"></script>

@@ -7,17 +7,19 @@ html, body, #root {
   padding: 0;
   width: 100%;
   height: 100%;
-  background: rgba(18, 18, 24, 0.95);
+  background: transparent;
   overflow: hidden;
   font-family: system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
 }
 
 .app-root {
   position: relative;
   width: 100%;
   height: 100%;
-  background: rgba(18, 18, 24, 0.95);
+  background: transparent;
   user-select: none;
+  isolation: isolate;
 }
 
 .confirmation-overlay {
@@ -28,12 +30,10 @@ html, body, #root {
   align-items: center;
   justify-content: center;
   z-index: 200;
-  -webkit-app-region: no-drag;
 }
 
 .confirmation-dialog {
   background: rgba(30, 30, 45, 0.95);
-  backdrop-filter: blur(20px);
   border-radius: 16px;
   padding: 20px;
   max-width: 340px;
@@ -87,7 +87,6 @@ html, body, #root {
   padding: 8px 18px;
   font-size: 13px;
   cursor: pointer;
-  -webkit-app-region: no-drag;
 }
 
 .confirmation-deny {
@@ -116,7 +115,6 @@ html, body, #root {
   align-items: center;
   justify-content: center;
   z-index: 300;
-  -webkit-app-region: no-drag;
 }
 
 .fatal-error-content {
@@ -180,4 +178,157 @@ html, body, #root {
 
 .process-ready {
   color: rgba(100, 255, 100, 0.7);
+}
+
+.zoom-controls {
+  position: absolute;
+  bottom: 16px;
+  left: 16px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  z-index: 30;
+}
+
+.app-root.chat-open .zoom-controls {
+  bottom: 72px;
+}
+
+.zoom-controls button {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: rgba(20, 20, 30, 0.75);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: #fff;
+  font-size: 18px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.zoom-controls button:hover {
+  background: rgba(40, 40, 60, 0.9);
+}
+
+.zoom-label {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.6);
+  min-width: 36px;
+  text-align: center;
+}
+
+/* ─── Sidebar buttons (window drag, avatar move, chat) ────────────────── */
+
+.sidebar-buttons {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 30;
+}
+
+.app-root.chat-open .sidebar-buttons {
+  bottom: 72px;
+}
+
+.sidebar-btn {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: rgba(20, 20, 30, 0.75);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: #fff;
+  font-size: 16px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.sidebar-btn:hover {
+  background: rgba(40, 40, 60, 0.9);
+}
+
+.window-drag-btn {
+  cursor: grab;
+}
+
+.window-drag-btn:active {
+  cursor: grabbing;
+}
+
+.move-toggle-btn.active {
+  background: rgba(130, 180, 255, 0.5);
+  border-color: rgba(130, 180, 255, 0.8);
+}
+
+/* ─── Push-to-Talk indicator ─────────────────────────────────────────── */
+
+.ptt-indicator {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(255, 60, 60, 0.85);
+  color: #fff;
+  padding: 6px 14px;
+  border-radius: 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  z-index: 40;
+  pointer-events: none;
+  min-width: 80px;
+}
+
+.ptt-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #fff;
+  animation: ptt-pulse 1s ease-in-out infinite;
+}
+
+.ptt-dot.speech {
+  background: #0f0;
+  box-shadow: 0 0 6px #0f0;
+}
+
+.ptt-level-bar {
+  width: 60px;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.ptt-level-fill {
+  height: 100%;
+  background: #fff;
+  border-radius: 3px;
+  transition: width 0.05s linear;
+}
+
+.ptt-level-fill.speech {
+  background: #0f0;
+}
+
+@keyframes ptt-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+/* ─── Settings & avatar toggle buttons ────────────────────────────────── */
+
+.sidebar-btn.settings-btn {
+  font-size: 16px;
+}
+
+.sidebar-btn.avatar-toggle-btn.active {
+  background: rgba(100, 100, 100, 0.5);
+  opacity: 0.6;
 }

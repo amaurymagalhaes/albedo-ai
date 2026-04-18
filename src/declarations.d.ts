@@ -1,9 +1,9 @@
 declare module "three";
-declare module "pixi-live2d-display" {
+declare module "pixi-live2d-display/cubism4" {
   export class Live2DModel {
     static registerTicker(ticker: any): void;
     static from(
-      modelPath: string,
+      source: string | object,
       options?: { autoInteract?: boolean }
     ): Promise<Live2DModel>;
     static cubismReady: boolean;
@@ -21,6 +21,19 @@ declare module "pixi-live2d-display" {
         addParameterValueById(id: string, value: number): void;
       };
     };
+  }
+  export class Live2DFactory {
+    static runtimes: any[];
+    static live2DModelMiddlewares: any[];
+    static setupEssentials: any;
+    static registerRuntime(runtime: any): void;
+    static findRuntime(source: any): any;
+  }
+  export class Live2DLoader {
+    static middlewares: any[];
+  }
+  export class Cubism4ModelSettings {
+    static isValidJSON(json: any): boolean;
   }
   export const config: {
     cubismCorePath: string;

@@ -5,6 +5,9 @@ export default {
     identifier: "ai.albedo.app",
     version: "0.1.0",
   },
+  runtime: {
+    exitOnLastWindowClosed: false,
+  },
   build: {
     bun: {
       entrypoint: "src/bun/index.ts",
@@ -15,12 +18,17 @@ export default {
         entrypoint: "src/views/mainview/main.tsx",
         target: "browser",
       },
+      settings: {
+        entrypoint: "src/views/settings/main.tsx",
+        target: "browser",
+      },
     },
     copy: {
       "src/views/mainview/index.html": "views/mainview/index.html",
+      "src/views/settings/index.html": "views/settings/index.html",
       "proto/audio.proto": "proto/audio.proto",
       "proto/daemon.proto": "proto/daemon.proto",
-      "assets/models/albedo": "views/mainview/models/albedo",
+      "assets/models": "views/mainview/models",
       "assets/lib/live2dcubismcore.min.js": "views/mainview/live2dcubismcore.min.js",
     },
     buildFolder: ".electrobun/build",

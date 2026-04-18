@@ -40,6 +40,7 @@ export function LipSyncTest() {
       <Avatar
         ref={avatarRef}
         modelPath="../../../assets/models/albedo/albedo.model3.json"
+        modelType="live2d"
         expression={expression}
       />
       <button

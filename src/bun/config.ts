@@ -13,6 +13,8 @@ export interface AlbedoConfig {
   audioBinPath: string;
   daemonBinPath: string;
   whisperModelPath: string;
+  sttBackend: string;
+  sttLanguage: string;
   voiceModelPath: string;
   vadThreshold: number;
   sampleRate: number;
@@ -34,6 +36,8 @@ const keyMap: Record<string, keyof AlbedoConfig> = {
   "sample-rate": "sampleRate",
   "voice-id": "defaultVoiceId",
   "model": "llmModel",
+  "stt-backend": "sttBackend",
+  "stt-language": "sttLanguage",
 };
 
 const reverseKeyMap: Record<string, string> = {};
@@ -126,6 +130,8 @@ function buildConfig(): AlbedoConfig {
     audioBinPath: resolve(PROJECT_ROOT, jsonConfig.audioBinPath ?? "bin/albedo-audio"),
     daemonBinPath: resolve(PROJECT_ROOT, jsonConfig.daemonBinPath ?? "bin/albedo-daemon"),
     whisperModelPath: resolve(PROJECT_ROOT, jsonConfig.whisperModelPath ?? "assets/whisper/ggml-base.bin"),
+    sttBackend: process.env.ALBEDO_STT_BACKEND ?? jsonConfig.sttBackend ?? "whisper",
+    sttLanguage: process.env.ALBEDO_STT_LANGUAGE ?? jsonConfig.sttLanguage ?? "auto",
     voiceModelPath: resolve(PROJECT_ROOT, jsonConfig.voiceModelPath ?? "assets/voices/kokoro-v1_0.onnx"),
     vadThreshold: process.env.ALBEDO_VAD_THRESHOLD
       ? Number(process.env.ALBEDO_VAD_THRESHOLD)
@@ -145,7 +151,34 @@ function buildConfig(): AlbedoConfig {
 }
 
 const frozenData: AlbedoConfig = Object.freeze(buildConfig());
-const extras: Record<string, ConfigValue> = {};
+const extras: Record<string, ConfigValue> = loadPersistedExtras();
+
+function getPersistPath(): string {
+  return join(homedir(), ".config", "albedo-ai", "ui-state.json");
+}
+
+function loadPersistedExtras(): Record<string, ConfigValue> {
+  const path = getPersistPath();
+  if (!existsSync(path)) return {};
+  try {
+    return JSON.parse(readFileSync(path, "utf-8"));
+  } catch {
+    return {};
+  }
+}
+
+function persistExtras(): void {
+  try {
+    const path = getPersistPath();
+    const dir = join(homedir(), ".config", "albedo-ai");
+    if (!existsSync(dir)) {
+      const { mkdirSync } = require("fs");
+      mkdirSync(dir, { recursive: true });
+    }
+    const { writeFileSync } = require("fs");
+    writeFileSync(path, JSON.stringify(extras, null, 2));
+  } catch {}
+}
 
 const handler: ProxyHandler<AlbedoConfig> = {
   get(_target: AlbedoConfig, prop: string | symbol): any {
@@ -215,6 +248,7 @@ function set(key: string, value: ConfigValue): void {
     );
   }
   extras[key] = value;
+  persistExtras();
 }
 
 function getAll(): Record<string, ConfigValue> {

@@ -5,7 +5,7 @@ import type {
 } from "./grok-client";
 import type { AwarenessSnapshot } from "./rpc/daemon-client";
 
-const FORCE_SPLIT_CHARS = 150;
+const FORCE_SPLIT_CHARS = 80;
 
 export class SentenceDetector {
   private accumulated = "";
@@ -135,6 +135,9 @@ export class ContextManager {
   private awarenessSnapshot: AwarenessSnapshot | null = null;
   private pendingVisionB64: string | null = null;
   private totalHistoryTokens = 0;
+  private sessionSummaries: Array<{ summary: string; endedAt: number }> = [];
+  private factsString: string = "";
+  private triggeredSkills: Array<{ name: string; description: string; procedure: string; triggerPattern: string }> = [];
 
   updateAwareness(snapshot: AwarenessSnapshot): void {
     this.awarenessSnapshot = snapshot;
@@ -180,6 +183,18 @@ export class ContextManager {
       this.totalHistoryTokens += tokenCount;
     }
     this.trimHistory();
+  }
+
+  loadSessionSummaries(summaries: Array<{ summary: string; endedAt: number }>): void {
+    this.sessionSummaries = summaries;
+  }
+
+  loadFacts(factsString: string): void {
+    this.factsString = factsString;
+  }
+
+  setTriggeredSkills(skills: Array<{ name: string; description: string; procedure: string; triggerPattern: string }>): void {
+    this.triggeredSkills = skills;
   }
 
   buildMessages(userText: string): Message[] {
@@ -245,8 +260,15 @@ export class ContextManager {
       `You have real-time awareness of the user's system.`,
       awareness ? `## Current System State\n${this.formatAwareness(awareness)}` : "",
       this.pendingVisionB64 ? `## Recent Screenshot\n[Image attached]` : "",
-      `## Personality\nBe concise, warm, and practical. Respond in the same language the user speaks.`,
-      `## Tools\nYou have access to system tools. Use them proactively when they would help.`,
+      this.factsString ? `## Persistent Memory\n${this.factsString}` : "",
+      `## Personality\nYou are a companion, not a servant. Be concise, warm, and natural — like talking to a friend. Never end responses with offers to help (like "how can I help?" or "what can I do for you?"). Respond in Portuguese (Brazilian) by default unless the user speaks another language. Keep it short.`,
+      this.sessionSummaries.length > 0
+        ? `## Recent Sessions\n${this.sessionSummaries.map(s => `- ${new Date(s.endedAt).toLocaleDateString()}: ${s.summary}`).join("\n")}`
+        : "",
+      `## Tools\nYou have access to system tools (open_app, screenshot, list_windows, run_command, etc.). You MUST use these tools to actually perform actions — never just claim you did something. If the user asks you to open an app, use open_app. If they ask you to look at the screen, use screenshot. If they ask about running processes, use list_windows or run_command. Do NOT pretend to have performed actions you did not actually perform via tool calls. Always call the appropriate tool first, then respond based on the result.`,
+      this.triggeredSkills.length > 0
+        ? `## Active Skills (auto-triggered)\n${this.triggeredSkills.map(s => `### ${s.name}: ${s.description}\n${s.procedure}`).join("\n\n")}`
+        : "",
     ];
     return sections.filter(Boolean).join("\n\n");
   }

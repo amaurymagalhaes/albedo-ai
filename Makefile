@@ -67,6 +67,8 @@ build-go:
 # ─── Electrobun / Bun ────────────────────────────────────────────────────────
 
 build-bun:
+	@echo "==> Patching Electrobun..."
+	bash scripts/patch-electrobun.sh
 	@echo "==> Building Electrobun app..."
 	bun run build
 	@echo "==> Electrobun build done."
@@ -75,15 +77,19 @@ build-bun:
 
 dev:
 	@echo "==> Stopping existing processes..."
-	-pkill -f "bin/albedo-audio" 2>/dev/null || true
-	-pkill -f "bin/albedo-daemon" 2>/dev/null || true
-	sleep 0.5
-	rm -f /tmp/albedo-audio.sock /tmp/albedo-daemon.sock
+	@killall -9 albedo-audio albedo-daemon 2>/dev/null || true
+	@for i in 1 2 3 4 5; do lsof $(BIN_DIR)/albedo-daemon 2>/dev/null || break; sleep 0.5; done
+	@rm -f /tmp/albedo-audio.sock /tmp/albedo-daemon.sock
 	@echo "==> Building..."
 	$(MAKE) build-rust build-go bun-run-build
+	@if ! curl -s -o /dev/null -w '%%{http_code}' -X POST http://localhost:9880/synthesize -H 'Content-Type: application/json' -d '{"text":"t","speed":1.0}' 2>/dev/null | grep -q 200; then \
+		echo "==> Starting TTS server..."; \
+		ELEVENLABS_API_KEY=$$(grep ELEVENLABS_API_KEY .env | cut -d= -f2) setsid python3 scripts/tts/server.py --port 9880 > /tmp/albedo-tts.log 2>&1 & \
+		sleep 3; \
+	fi
 	@echo "==> Starting Electrobun dev server..."
 	bun run dev; EXIT=$$?; \
-	kill $$(pgrep -f "albedo-audio") $$(pgrep -f "albedo-daemon") 2>/dev/null; \
+	killall -9 albedo-audio albedo-daemon 2>/dev/null || true; \
 	rm -f /tmp/albedo-audio.sock /tmp/albedo-daemon.sock; \
 	exit $$EXIT
 

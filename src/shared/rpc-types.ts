@@ -7,6 +7,15 @@ export interface Viseme {
   weight: number;
 }
 
+export type AvatarFormat = "live2d" | "vrm";
+
+export interface AvatarModelInfo {
+  id: string;
+  name: string;
+  format: AvatarFormat;
+  path: string;
+}
+
 export type ExpressionName = "neutral" | "happy" | "sad" | "alert";
 
 export interface MainToViewEvents {
@@ -20,7 +29,7 @@ export interface MainToViewEvents {
   "tool-confirmation-request": { name: string; args: string; dangerous: boolean };
   "process-status": { name: string; status: string; attempt?: number };
   "fatal-error": { message: string; detail: string };
-  "open-settings": {};
+  "setting-update": { key: string; value: unknown };
 }
 
 export interface ViewToMainEvents {
@@ -28,4 +37,13 @@ export interface ViewToMainEvents {
   "setting-changed": { key: string; value: unknown };
   "webview-ready": void;
   "tool-confirmation-response": { approved: boolean };
+  "toggle-settings": {};
+  "list-audio-devices": {};
+  "set-audio-device": { deviceId: string };
+  "set-output-device": { deviceId: string };
+  "set-avatar-scale": { scale: number };
+  "drag-start": {};
+  "window-drag-start": {};
+  "window-drag-stop": {};
+  "drag-stop": {};
 }

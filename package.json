@@ -9,19 +9,23 @@
     "setup": "bash scripts/setup-and-run.sh"
   },
   "dependencies": {
+    "@pixiv/three-vrm": "^3.5.2",
     "electrobun": "1.17.3-beta.11",
+    "live2dcubismcore": "^1.0.2",
     "pixi-live2d-display": "0.4.0",
     "pixi.js": "7.4.2",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "three": "^0.184.0"
   },
   "devDependencies": {
+    "@grpc/grpc-js": "^1.11.1",
+    "@grpc/proto-loader": "^0.7.13",
+    "@protobuf-ts/plugin": "^2.9.4",
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
-    "typescript": "^5.4.5",
-    "@protobuf-ts/plugin": "^2.9.4",
-    "@grpc/grpc-js": "^1.11.1",
-    "@grpc/proto-loader": "^0.7.13"
+    "@types/three": "^0.184.0",
+    "typescript": "^5.4.5"
   },
   "overrides": {
     "pixi.js": "7.4.2"

@@ -32,6 +32,8 @@ export class AudioClient extends EventEmitter {
   private transcriptionCb: ((result: TranscriptionEvent) => void) | null = null;
   private transcriptionCancel: (() => void) | null = null;
   private captureActive = false;
+  private rawPcmChunks: Float32Array[] = [];
+  private isRecordingRaw = false;
 
   constructor(private socketPath: string) {
     super();
@@ -133,6 +135,9 @@ export class AudioClient extends EventEmitter {
   async startCapture(config: {
     sampleRate: number;
     vadThreshold: number;
+    deviceId?: string;
+    sttBackend?: string;
+    sttLanguage?: string;
   }): Promise<{ active: boolean; deviceName: string }> {
     return this.withReconnect(() =>
       new Promise((resolve, reject) => {
@@ -140,6 +145,9 @@ export class AudioClient extends EventEmitter {
           {
             sample_rate: config.sampleRate,
             vad_threshold: config.vadThreshold,
+            device_id: config.deviceId || "",
+            stt_backend: config.sttBackend || "",
+            stt_language: config.sttLanguage || "",
           },
           (err: grpc.ServiceError | null, response: any) => {
             if (err) reject(err);
@@ -176,6 +184,32 @@ export class AudioClient extends EventEmitter {
     );
   }
 
+  async listDevices(): Promise<{
+    inputs: Array<{ id: string; name: string; isDefault: boolean }>;
+    outputs: Array<{ id: string; name: string; isDefault: boolean }>;
+  }> {
+    return this.withReconnect(() =>
+      new Promise((resolve, reject) => {
+        this.client.listDevices(
+          {},
+          (err: grpc.ServiceError | null, response: any) => {
+            if (err) reject(err);
+            else {
+              resolve({
+                inputs: (response.inputs ?? []).map((d: any) => ({
+                  id: d.id, name: d.name, isDefault: d.is_default,
+                })),
+                outputs: (response.outputs ?? []).map((d: any) => ({
+                  id: d.id, name: d.name, isDefault: d.is_default,
+                })),
+              });
+            }
+          }
+        );
+      })
+    );
+  }
+
   async synthesize(req: {
     text: string;
     voiceId: string;
@@ -201,6 +235,51 @@ export class AudioClient extends EventEmitter {
                   weight: v.weight,
                 })),
               });
+          }
+        );
+      })
+    );
+  }
+
+  async clearPlayback(): Promise<void> {
+    return this.withReconnect(() =>
+      new Promise((resolve, reject) => {
+        this.client.clearPlayback(
+          {},
+          (err: grpc.ServiceError | null) => {
+            if (err) reject(err);
+            else resolve();
+          }
+        );
+      })
+    );
+  }
+
+  async waitForDrain(): Promise<void> {
+    return this.withReconnect(() =>
+      new Promise((resolve, reject) => {
+        this.client.waitForDrain(
+          {},
+          (err: grpc.ServiceError | null) => {
+            if (err) reject(err);
+            else resolve();
+          }
+        );
+      })
+    );
+  }
+
+  async enqueuePCM(pcmData: Uint8Array, sampleRate: number): Promise<{ samplesEnqueued: number; durationMs: number }> {
+    return this.withReconnect(() =>
+      new Promise((resolve, reject) => {
+        this.client.enqueuePcm(
+          { pcm_data: pcmData, sample_rate: sampleRate },
+          (err: grpc.ServiceError | null, response: any) => {
+            if (err) reject(err);
+            else resolve({
+              samplesEnqueued: response.samples_enqueued,
+              durationMs: response.duration_ms,
+            });
           }
         );
       })
@@ -321,5 +400,68 @@ export class AudioClient extends EventEmitter {
         this.scheduleReconnect();
       }
     }, delay);
+  }
+
+  watchAudioLevel(
+    cb: (level: { rms: number; peak: number; isSpeech: boolean }) => void
+  ): () => void {
+    let cancelled = false;
+    const call = this.client.watchAudioLevel({});
+    call.on("data", (msg: any) => {
+      cb({
+        rms: msg.rms,
+        peak: msg.peak,
+        isSpeech: msg.is_speech,
+      });
+    });
+    call.on("error", () => { if (!cancelled) cancelled = true; });
+    return () => {
+      cancelled = true;
+      call.cancel();
+    };
+  }
+
+  /** Stop capture and return raw PCM buffer */
+  async stopCaptureRaw(): Promise<Float32Array> {
+    await this.stopCapture();
+    return new Float32Array(0);
+  }
+
+  /** Force-transcribe the PTT buffer (no VAD) */
+  async forceTranscribe(): Promise<string> {
+    console.log("[audio-client] Calling ForceTranscribe RPC...");
+    return new Promise((resolve, reject) => {
+      this.client.forceTranscribe({}, (err: any, result: any) => {
+        if (err) {
+          console.error("[audio-client] ForceTranscribe error:", err.message);
+          reject(err);
+        } else {
+          console.log("[audio-client] ForceTranscribe result:", result.text);
+          resolve(result.text ?? "");
+        }
+      });
+    });
+  }
+
+  async setOutputDevice(deviceId: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      this.client.setOutputDevice({ device_id: deviceId }, (err: any) => {
+        if (err) reject(err);
+        else resolve();
+      });
+    });
+  }
+
+  /** Toggle PTT recording without stopping capture */
+  async setPttRecording(recording: boolean): Promise<{ recording: boolean; bufferedSamples: number }> {
+    return new Promise((resolve, reject) => {
+      this.client.setPttRecording({ recording }, (err: any, response: any) => {
+        if (err) reject(err);
+        else resolve({
+          recording: response.recording,
+          bufferedSamples: Number(response.buffered_samples ?? 0),
+        });
+      });
+    });
   }
 }

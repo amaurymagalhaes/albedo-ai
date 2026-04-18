@@ -34,7 +34,7 @@ export default function ChatInput({ visible, onSubmit, onClose }: ChatInputProps
   }
 
   return (
-    <div className={`chat-input-bar ${visible ? "visible" : ""}`}>
+    <div className={`chat-input-bar electrobun-webkit-app-region-no-drag ${visible ? "visible" : ""}`}>
       <input
         ref={inputRef}
         className="chat-input-field"

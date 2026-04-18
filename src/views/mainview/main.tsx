@@ -1,4 +1,3 @@
-import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { Electroview } from "electrobun/view";
 import { initRpc } from "./hooks/useRPC";
@@ -28,8 +27,4 @@ initRpc({
   request: rpc.request as any,
 });
 
-createRoot(document.getElementById("root")!).render(
-  <StrictMode>
-    <App />
-  </StrictMode>
-);
+createRoot(document.getElementById("root")!).render(<App />);

@@ -44,6 +44,7 @@ impl VadEngine {
         let copy_len = samples.len().min(chunk_size);
         padded[..copy_len].copy_from_slice(&samples[..copy_len]);
 
+        // VAD debug logging removed — was flooding stdout
         let input_array = ndarray::Array2::from_shape_vec((1, chunk_size), padded)?;
         let sr_array = ndarray::array![self.sample_rate];
         let state_array = self.state.clone();

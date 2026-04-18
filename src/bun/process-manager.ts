@@ -60,11 +60,20 @@ export class ProcessManager extends EventEmitter {
     const binPath = mp.binPath;
     const projectRoot = this.config.projectRoot;
 
+    // Strip LD_PRELOAD inherited from CEF parent — child processes don't need CEF libs
+    const cleanEnv = { ...process.env };
+    delete cleanEnv.LD_PRELOAD;
+
+    if (mp.name === "albedo-audio") {
+      cleanEnv.STT_BACKEND = this.config.sttBackend;
+      cleanEnv.ALBEDO_STT_LANGUAGE = this.config.sttLanguage;
+    }
+
     const proc = Bun.spawn([binPath], {
       cwd: projectRoot,
       stderr: "pipe",
       stdout: "pipe",
-      env: { ...process.env },
+      env: cleanEnv,
     });
 
     if (proc.exitCode !== null) {

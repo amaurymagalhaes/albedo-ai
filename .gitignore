@@ -24,3 +24,4 @@ daemon/proto/*.pb.go
 src/views/mainview/vendor/live2dcubismcore.min.js
 assets/models/
 .env
+.collaborator

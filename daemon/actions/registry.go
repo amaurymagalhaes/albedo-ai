@@ -6,14 +6,58 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"sort"
+	"strings"
 	"sync"
 
 	pb "albedo-ai/daemon/proto"
 
 	"albedo-ai/daemon/awareness"
 )
+
+func linuxAppCandidates(app string) []string {
+	lower := strings.ToLower(app)
+	candidates := []string{app}
+
+	switch lower {
+	case "firefox", "mozilla firefox":
+		candidates = append(candidates, "firefox", "Firefox", "org.mozilla.firefox")
+	case "chrome", "google chrome":
+		candidates = append(candidates, "google-chrome", "google-chrome-stable", "chrome-browser")
+	case "chromium":
+		candidates = append(candidates, "chromium", "chromium-browser")
+	case "code", "vscode", "visual studio code":
+		candidates = append(candidates, "code", "code-oss", "visual-studio-code")
+	case "terminal":
+		candidates = append(candidates, "org.gnome.Terminal", "gnome-terminal", "konsole", "xfce4-terminal")
+	case "files", "file manager", "nautilus":
+		candidates = append(candidates, "org.gnome.Nautilus", "nautilus", "thunar", "dolphin", "pcmanfm")
+	case "discord":
+		candidates = append(candidates, "discord", "com.discordapp.Discord")
+	case "spotify":
+		candidates = append(candidates, "spotify", "com.spotify.Client")
+	}
+
+	dirs := []string{
+		"/usr/share/applications",
+		"/var/lib/flatpak/exports/share/applications",
+		filepath.Join(os.Getenv("HOME"), ".local/share/applications"),
+	}
+	for _, dir := range dirs {
+		entries, _ := os.ReadDir(dir)
+		for _, e := range entries {
+			name := e.Name()
+			if strings.Contains(strings.ToLower(name), lower) && strings.HasSuffix(name, ".desktop") {
+				base := strings.TrimSuffix(name, ".desktop")
+				candidates = append(candidates, base)
+			}
+		}
+	}
+
+	return candidates
+}
 
 type ToolHandler func(args json.RawMessage) (string, error)
 
@@ -112,8 +156,8 @@ func RegisterDefaults(r *Registry) {
 
 	r.Register(&ToolDef{
 		Name:        "open_app",
-		Description: "Open an application or file. On Linux uses xdg-open, on macOS uses open -a, on Windows uses start.",
-		Schema:      `{"type":"object","properties":{"app":{"type":"string","description":"Application name, .desktop file, or file path"}},"required":["app"]}`,
+		Description: "Open an application or file. On Linux uses gtk-launch or searches .desktop files, on macOS uses open -a, on Windows uses start.",
+		Schema:      `{"type":"object","properties":{"app":{"type":"string","description":"Application name (e.g. 'firefox', 'Firefox', 'org.mozilla.firefox'), .desktop file, or file path"}},"required":["app"]}`,
 		Dangerous:   false,
 		Handler: func(args json.RawMessage) (string, error) {
 			var p struct {
@@ -122,19 +166,38 @@ func RegisterDefaults(r *Registry) {
 			if err := json.Unmarshal(args, &p); err != nil {
 				return "", fmt.Errorf("invalid args: %w", err)
 			}
-			var cmd *exec.Cmd
+
 			switch runtime.GOOS {
 			case "darwin":
-				cmd = exec.Command("open", "-a", p.App)
+				cmd := exec.Command("open", "-a", p.App)
+				if err := cmd.Run(); err != nil {
+					return "", fmt.Errorf("failed to open %q: %w", p.App, err)
+				}
+				return fmt.Sprintf("opened %s", p.App), nil
+
 			case "windows":
-				cmd = exec.Command("cmd", "/c", "start", "", p.App)
+				cmd := exec.Command("cmd", "/c", "start", "", p.App)
+				if err := cmd.Run(); err != nil {
+					return "", fmt.Errorf("failed to open %q: %w", p.App, err)
+				}
+				return fmt.Sprintf("opened %s", p.App), nil
+
 			default:
-				cmd = exec.Command("xdg-open", p.App)
+				candidates := linuxAppCandidates(p.App)
+				for _, candidate := range candidates {
+					cmd := exec.Command("gtk-launch", candidate)
+					if cmd.Run() == nil {
+						return fmt.Sprintf("opened %s", p.App), nil
+					}
+				}
+
+				cmd := exec.Command("sh", "-c", fmt.Sprintf("which %q 2>/dev/null && nohup %q >/dev/null 2>&1 &", p.App, p.App))
+				if err := cmd.Run(); err == nil {
+					return fmt.Sprintf("opened %s", p.App), nil
+				}
+
+				return "", fmt.Errorf("could not find or launch %q — tried: %v", p.App, candidates)
 			}
-			if err := cmd.Start(); err != nil {
-				return "", err
-			}
-			return fmt.Sprintf("opened %s", p.App), nil
 		},
 	})
 
